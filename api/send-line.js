@@ -1,12 +1,14 @@
-// api/send-line.js
 export default async function handler(req, res) {
-  // รับเฉพาะการส่งข้อมูลแบบ POST
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
-  }
-  
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+
   const { targetId, messageText } = req.body;
-  const token = process.env.VITE_LINE_ACCESS_TOKEN; // ดึงรหัสจากระบบ Vercel
+  
+  // 🟢 แก้ชื่อตัวแปรให้ตรงกับใน Vercel ของคุณ (VITE_LINE_ACCESS_TOKEN)
+  const token = process.env.VITE_LINE_ACCESS_TOKEN;
+
+  if (!token || !targetId) {
+    return res.status(400).json({ error: 'Missing LINE token or targetId in Vercel Environment' });
+  }
 
   try {
     const response = await fetch('https://api.line.me/v2/bot/message/push', {
@@ -22,8 +24,15 @@ export default async function handler(req, res) {
     });
 
     const data = await response.json();
-    return res.status(200).json(data);
+    
+    // ดักจับเผื่อ Token ผิด หรือส่งไม่ผ่าน
+    if (!response.ok) {
+       console.error("LINE API Error:", data);
+       return res.status(response.status).json({ error: 'LINE API Error', details: data });
+    }
+
+    res.status(200).json({ success: true, data });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message });
   }
 }
