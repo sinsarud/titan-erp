@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "skills": {
+    "flags-sdk": {
+      "source": "vercel/flags",
+      "sourceType": "github",
+      "computedHash": "8be3c47c31e83deb10705dc0435a19bfc8c0679b421132847110e2f76d0e5638"
+    },
+    "slack-agent": {
+      "source": "vercel-labs/slack-agent-skill",
+      "sourceType": "github",
+      "computedHash": "13b7cb0b9d265942855c95a57f0ce24746b84bf192ab7f5d496c5a1f64d93522"
+    }
+  }
+}

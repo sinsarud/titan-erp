@@ -88,7 +88,7 @@ export default function AuthPortal() {
     }
   };
 
-const handleAuthenticate = async (targetRoute) => {
+  const handleAuthenticate = async (targetRoute) => {
     if (!username || !password) {
       Swal.fire({
         icon: 'warning',
@@ -109,17 +109,14 @@ const handleAuthenticate = async (targetRoute) => {
 
     setIsLoading(true);
 
-    // 🛑 บังคับขอ GPS ก่อนล็อกอิน (ถ้าไม่ให้ = อดเข้าเว็บ)
     if (!navigator.geolocation) {
       Swal.fire({ icon: 'error', title: 'ไม่รองรับ GPS', text: 'เบราว์เซอร์ของคุณไม่รองรับการระบุตำแหน่ง ไม่สามารถใช้งานได้ครับ', customClass: { popup: 'rounded-[2rem]' } });
       setIsLoading(false);
       return;
     }
 
-    // 📍 สั่งเด้ง Popup ขอพิกัดทันทีที่กดปุ่ม Login
     navigator.geolocation.getCurrentPosition(
       async (position) => {
-        // ✅ 1. พนักงานกด Allow GPS แล้ว -> ดำเนินการเช็ครหัสผ่านและให้ล็อกอินต่อได้
         try {
           const { data, error } = await supabase
             .from("employees")
@@ -146,6 +143,26 @@ const handleAuthenticate = async (targetRoute) => {
           }
 
           const userData = data[0];
+
+          // 🚩 สกัดผู้ใช้งานที่ถูกระงับ (is_active เป็น false)
+          if (userData.is_active === false) {
+            Swal.fire({
+              icon: 'warning',
+              title: 'บัญชีถูกระงับ',
+              text: 'บัญชีนี้ถูกปิดการใช้งานชั่วคราว กรุณาติดต่อ Admin ครับ',
+              confirmButtonText: 'ตกลง',
+              confirmButtonColor: '#f59e0b',
+              background: '#ffffff',
+              backdrop: `rgba(15, 23, 42, 0.6) backdrop-blur-sm`,
+              customClass: {
+                popup: 'rounded-[2rem] shadow-2xl border border-amber-100',
+                title: 'text-amber-600 font-black text-xl mt-2',
+                confirmButton: 'px-8 py-3 rounded-xl font-bold hover:scale-105 transition-transform shadow-md'
+              }
+            });
+            setIsLoading(false);
+            return;
+          }
 
           if (String(userData.password) !== String(password)) {
             Swal.fire({
@@ -176,11 +193,9 @@ const handleAuthenticate = async (targetRoute) => {
             localStorage.removeItem("titan_saved_password");
           }
 
-          // ทันทีที่ล็อกอินผ่าน บังคับให้ระบบหลังจากนี้จำค่าเป็น "TH" อัตโนมัติ
           localStorage.setItem("titan_lang", "TH");
           notifyLineOA(userData.username);
           
-          // 🌟 แจ้งเตือนเข้าสู่ระบบสำเร็จ (Success Popup หรูหรา)
           await Swal.fire({
             icon: 'success',
             title: 'เข้าสู่ระบบสำเร็จ!',
@@ -216,7 +231,6 @@ const handleAuthenticate = async (targetRoute) => {
         }
       },
       (error) => {
-        // ❌ 2. พนักงานกด Block (ไม่อนุญาต) หรือหาพิกัดไม่ได้ -> เด้งออก ไม่ให้เข้าสู่ระบบเด็ดขาด!
         Swal.fire({
           icon: 'error',
           title: '⚠️ ไม่สามารถเข้าสู่ระบบได้',
@@ -230,7 +244,7 @@ const handleAuthenticate = async (targetRoute) => {
     );
   };
 
-const handleForgotPassword = async () => {
+  const handleForgotPassword = async () => {
     const { value: targetUsername } = await Swal.fire({
       title: t.swalForgotTitle,
       text: t.swalForgotText,
@@ -287,8 +301,7 @@ const handleForgotPassword = async () => {
           </div>
         `;
 
-        // ✨ เอาอิโมจิออกจากหัวข้ออีเมล
-        const cleanSubject = lang === 'TH' ? "[Pancake HR] รหัสผ่านชั่วคราวของคุณ" : "[Pancake HR] Your Temporary Password";
+        const cleanSubject = "[Pancake HR] Your Temporary Password";
 
         await fetch("https://script.google.com/macros/s/AKfycbxBMRd9gKYzHU7Pz0-189-BOYVb15eS7PmF9zKiUYCiHlDUhjpe39vi7Y3Vx1sMr2VEoA/exec", {
           method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -310,13 +323,38 @@ const handleForgotPassword = async () => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#fffbfb] relative overflow-hidden font-sans p-4">
       
+      {/* 🌟 CSS ลูกเล่นมงกุฎ (ปรับให้วิ้งค์แค่ 10% ของเวลาทุกๆ 8 วินาที ดูผู้ดีสุดๆ) */}
+      <style>
+        {`
+          @keyframes crown-shine {
+            0% { transform: translateX(-150%) skewX(-20deg); }
+            10% { transform: translateX(150%) skewX(-20deg); }
+            100% { transform: translateX(150%) skewX(-20deg); }
+          }
+          .animate-crown-shine { animation: crown-shine 8s infinite ease-in-out; }
+        `}
+      </style>
+
       <div className="absolute w-[40rem] h-[40rem] bg-rose-200 rounded-full blur-[120px] opacity-40 top-[-10%] left-[-10%] animate-pulse"></div>
       <div className="absolute w-[40rem] h-[40rem] bg-amber-200 rounded-full blur-[120px] opacity-40 bottom-[-10%] right-[-10%] animate-pulse"></div>
 
-      <div className="w-[90%] sm:w-full max-w-[400px] bg-white/80 backdrop-blur-2xl p-6 sm:p-10 rounded-[2rem] shadow-[0_20px_60px_rgba(225,29,72,0.08)] border border-rose-50 z-10">
+      <div className="w-[90%] sm:w-full max-w-[400px] bg-white/80 backdrop-blur-2xl p-6 sm:p-10 rounded-[2rem] shadow-[0_20px_60px_rgba(225,29,72,0.08)] border border-rose-50 z-10 relative">
         
-        <div className="text-center mb-6 sm:mb-8">
-          <CrownLogo className="w-20 h-20 sm:w-24 sm:h-24 mx-auto mb-3 sm:mb-4 drop-shadow-2xl animate-fade-in" />
+        <div className="text-center mb-6 sm:mb-8 flex flex-col items-center">
+          
+          <div className="relative inline-flex items-center justify-center group cursor-pointer mb-3 sm:mb-4 overflow-hidden rounded-full px-2 py-2">
+            {/* แสงออร่าสีทองด้านหลัง */}
+            <div className="absolute inset-0 bg-amber-400/30 blur-2xl rounded-full group-hover:bg-amber-400/60 transition-all duration-700"></div>
+            
+            {/* โลโก้มงกุฎ */}
+            <CrownLogo className="w-20 h-20 sm:w-24 sm:h-24 drop-shadow-2xl transition-transform duration-500 group-hover:scale-110 relative z-10" />
+            
+            {/* ลำแสงวิ่งพาดเฉพาะตัวมงกุฎ (วิ่งแวบเดียว แล้วเว้นช่วงยาวๆ 8 วินาที) */}
+            <div className="absolute top-0 left-0 w-full h-full z-20 pointer-events-none rounded-full">
+              <div className="w-[150%] h-full bg-gradient-to-r from-transparent via-white/80 to-transparent transform -skew-x-12 animate-crown-shine"></div>
+            </div>
+          </div>
+
           <h1 className="text-2xl sm:text-3xl font-serif font-black text-[#881337] tracking-tight">{t.appName}</h1>
           <h2 className="text-[13px] sm:text-[15px] font-bold text-[#be123c] mt-1 font-serif italic">{t.appSub}</h2>
           <div className="flex items-center justify-center gap-2 mt-3">
@@ -329,12 +367,12 @@ const handleForgotPassword = async () => {
         <div className="space-y-3 sm:space-y-4">
           <div>
             <label className="text-[10px] sm:text-xs font-bold text-rose-800/60 uppercase tracking-widest mb-1 sm:mb-2 block ml-1">{t.usernameLabel}</label>
-            <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full bg-rose-50/50 border border-rose-100 focus:border-amber-400 focus:ring-4 focus:ring-amber-400/20 rounded-xl px-4 sm:px-5 py-3 sm:py-3.5 text-rose-900 font-bold placeholder-rose-300 outline-none transition-all text-xs sm:text-sm" placeholder={t.usernamePlace} />
+            <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleAuthenticate("/dashboard"); }} className="w-full bg-rose-50/50 border border-rose-100 focus:border-amber-400 focus:ring-4 focus:ring-amber-400/20 rounded-xl px-4 sm:px-5 py-3 sm:py-3.5 text-rose-900 font-bold placeholder-rose-300 outline-none transition-all text-xs sm:text-sm" placeholder={t.usernamePlace} />
           </div>
 
           <div>
             <label className="text-[10px] sm:text-xs font-bold text-rose-800/60 uppercase tracking-widest mb-1 sm:mb-2 block ml-1">{t.passwordLabel}</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full bg-rose-50/50 border border-rose-100 focus:border-amber-400 focus:ring-4 focus:ring-amber-400/20 rounded-xl px-4 sm:px-5 py-3 sm:py-3.5 text-rose-900 font-bold placeholder-rose-300 outline-none transition-all text-xs sm:text-sm" placeholder="••••••••" />
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') handleAuthenticate("/dashboard"); }} className="w-full bg-rose-50/50 border border-rose-100 focus:border-amber-400 focus:ring-4 focus:ring-amber-400/20 rounded-xl px-4 sm:px-5 py-3 sm:py-3.5 text-rose-900 font-bold placeholder-rose-300 outline-none transition-all text-xs sm:text-sm" placeholder="••••••••" />
           </div>
 
           <div className="flex justify-end mt-1">
@@ -358,6 +396,13 @@ const handleForgotPassword = async () => {
               {t.btnCheckin}
             </button>
           </div>
+
+          {/* ลายเซ็นคนทำ */}
+          <div className="mt-6 pt-5 border-t border-rose-100/50 flex flex-col items-center select-none pointer-events-none opacity-40 hover:opacity-100 transition-opacity">
+            <span className="text-[8px] font-bold text-rose-500/60 uppercase tracking-[0.3em]">DEVELOPED BY</span>
+            <span className="text-[10px] font-black text-[#881337] uppercase tracking-[0.2em] mt-1.5">{String.fromCharCode(83, 105, 110, 115, 97, 114, 117, 100)} W.</span>
+          </div>
+          
         </div>
       </div>
     </div>

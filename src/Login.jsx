@@ -35,16 +35,34 @@ export default function Login() {
   };
 
   const handleLogin = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault(); // 🛑 ป้องกันหน้าเว็บรีเฟรช 
+
+    // 🛑 ดักจับกรณีไม่ได้กรอก Username หรือ Password
+    if (!username.trim() || !password.trim()) {
+      Swal.fire({
+        icon: 'warning',
+        title: 'ข้อมูลไม่ครบถ้วน!',
+        text: 'กรุณากรอก Username และ Password ให้ครบถ้วนก่อนเข้าสู่ระบบครับ',
+        confirmButtonText: 'ตกลง',
+        confirmButtonColor: '#ec4899',
+        background: '#ffffff',
+        backdrop: `rgba(15, 23, 42, 0.6) backdrop-blur-sm`,
+        customClass: {
+          popup: 'rounded-[2rem] shadow-2xl border border-pink-100',
+          title: 'text-pink-600 font-black text-xl mt-2',
+          confirmButton: 'px-8 py-3 rounded-xl font-bold hover:scale-105 transition-transform shadow-md'
+        }
+      });
+      return; // หยุดการทำงานทันที
+    }
+
     setLoading(true);
     console.clear();
-    
-    // แปลงให้เป็นตัวเล็กทั้งหมดก่อนเลย
     const searchUsername = username.trim().toLowerCase();
     console.log("🔍 กำลังเช็ค Username:", searchUsername);
 
     try {
-      // 1. 🟢 ใช้ .eq() แบบเพียวๆ และ ❌ห้ามใช้ .single() เด็ดขาด❌ (ตัวการทำให้เกิด Error 406)
+      // 1. 🟢 ใช้ .eq() แบบเพียวๆ
       const { data, error } = await supabase
         .from("employees")
         .select("*")
@@ -55,14 +73,14 @@ export default function Login() {
         throw new Error("เกิดข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล");
       }
 
-      // 2. ❌ เช็คจาก Array ป้องกัน 406
+      // 2. เช็คจาก Array 
       if (!data || data.length === 0) {
         throw new Error("ไม่พบชื่อผู้ใช้งานนี้ในระบบ");
       }
 
       const userData = data[0]; 
 
-      // 3. 🔴 ตรวจสอบ Password (ครอบ String() ป้องกันเรื่องชนิดตัวแปรไม่ตรงกัน)
+      // 3. 🔴 ตรวจสอบ Password 
       if (String(userData.password) === String(password)) {
         console.log("✅ ล็อกอินสำเร็จ");
         
@@ -76,13 +94,13 @@ export default function Login() {
         // เซฟข้อมูล
         localStorage.setItem("titan_user", JSON.stringify(userData));
         
-        // 🌟 แจ้งเตือนเข้าสู่ระบบสำเร็จ (Success Popup หรูหรา)
+        // 🌟 แจ้งเตือนเข้าสู่ระบบสำเร็จ (Success Popup)
         await Swal.fire({
           icon: 'success',
           title: 'เข้าสู่ระบบสำเร็จ!',
           text: `ยินดีต้อนรับคุณ ${userData.full_name || userData.username} 🎉`,
           showConfirmButton: false,
-          timer: 1500, // โชว์ 1.5 วินาทีแล้วเด้งเปลี่ยนหน้าออโต้
+          timer: 1500, 
           background: '#ffffff',
           backdrop: `rgba(15, 23, 42, 0.6) backdrop-blur-sm`,
           customClass: {
@@ -98,7 +116,7 @@ export default function Login() {
       }
 
     } catch (err) {
-      // 🌟 แจ้งเตือนข้อผิดพลาด (Error Popup สวยๆ ลบ alert เชยๆ ทิ้ง)
+      // 🌟 แจ้งเตือนข้อผิดพลาด
       Swal.fire({
         icon: 'error',
         title: 'เข้าสู่ระบบไม่สำเร็จ!',
@@ -175,7 +193,7 @@ export default function Login() {
               <p style="margin: 0 0 20px; color: #881337; font-size: 26px; font-weight: 900;">${username}</p>
               
               <p style="margin: 0 0 5px; color: #9a3412; font-size: 12px; font-weight: 800; text-transform: uppercase;">Initial Password</p>
-              <p style="margin: 0; color: #881337; font-size: 26px; font-weight: 900; letter-spacing: 2px;">${password}</p>
+              <p style="margin: 0; color: #881337; font-size: 26px; font-weight: 900; letter-spacing: 2px;">${tempPass}</p>
             </div>
             
             <p style="color: #be123c; font-size: 13px; font-weight: 700; text-align: center; background-color: #fff1f2; padding: 15px; border-radius: 12px;">
@@ -193,7 +211,7 @@ export default function Login() {
           body: JSON.stringify({ 
             email: emp.email, 
             subject: "[Pancake ERP] รหัสผ่านชั่วคราวของคุณ", 
-            html: emailHtml 
+            html: htmlTemplate 
           })
         });
 
@@ -213,26 +231,50 @@ export default function Login() {
  return (
     // ✨ 1. เพิ่ม p-4 ตรงนี้ เพื่อไม่ให้กรอบขาวติดขอบจอมือถือ
     <div className="min-h-screen flex items-center justify-center bg-slate-50 relative overflow-hidden font-sans p-4 sm:p-0">
+      
+      {/* 🌟 ฝังลูกเล่นทั้งหมดไว้ที่นี่ ก๊อปวางทีเดียวจบ ไม่ต้องยุ่งกับไฟล์ CSS อื่น */}
+      <style>
+        {`
+          @keyframes premium-shine {
+            0% { transform: translateX(-150%) skewX(-20deg); opacity: 0; }
+            20% { transform: translateX(150%) skewX(-20deg); opacity: 0.5; }
+            100% { transform: translateX(150%) skewX(-20deg); opacity: 0; }
+          }
+          .animate-premium-shine { animation: premium-shine 3s infinite; }
+          
+          @keyframes bob {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+          }
+          .animate-bob { animation: bob 4s infinite ease-in-out; }
+        `}
+      </style>
+
       <div className="absolute w-[40rem] h-[40rem] bg-pink-200 rounded-full blur-[100px] opacity-50 top-[-10%] left-[-10%] animate-pulse"></div>
       <div className="absolute w-[40rem] h-[40rem] bg-purple-200 rounded-full blur-[100px] opacity-50 bottom-[-10%] right-[-10%] animate-pulse"></div>
 
-      {/* ✨ 2. ปรับ p-10 เดิม ให้กลายเป็น p-6 บนมือถือ และ sm:p-10 บนคอมพ์ */}
-      <div className="w-full max-w-[420px] bg-white/80 backdrop-blur-2xl p-6 sm:p-10 rounded-[2rem] shadow-[0_20px_50px_rgba(0,0,0,0.05)] border border-white z-10">
+      {/* ✨ 2. ปรับ p-10 เดิม ให้กลายเป็น p-6 บนมือถือ และ sm:p-10 บนคอมพ์ + 🌟 เพิ่มลูกเล่น animate-bob ให้ลอยนุ่มๆ และ group สำหรับ Hover โลโก้ */}
+      <div className="w-full max-w-[420px] bg-white/80 backdrop-blur-2xl p-6 sm:p-10 rounded-[2rem] shadow-[0_20px_50px_rgba(0,0,0,0.05)] border border-white z-10 relative overflow-hidden animate-bob group">
         
-        <div className="text-center mb-6 sm:mb-8">
-          {/* ✨ 3. ย่อขนาดโลโก้ลงนิดนึงบนมือถือ (w-20 h-20) */}
-          <PancakeLogo className="w-20 h-20 sm:w-24 sm:h-24 mx-auto mb-3 sm:mb-4 drop-shadow-xl animate-fade-in" />
+        {/* 🌟 3. แสง Sheen วิ่งพาดการ์ด */}
+        <div className="absolute top-0 left-0 w-[150%] h-full bg-gradient-to-r from-transparent via-white to-transparent animate-premium-shine z-20 pointer-events-none mix-blend-overlay"></div>
+
+        {/* 🌟 เพิ่ม relative z-30 เพื่อให้ตัวหนังสือ/ฟอร์มอยู่เหนือแสง Sheen */}
+        <div className="text-center mb-6 sm:mb-8 relative z-30">
+          {/* ✨ 3. ย่อขนาดโลโก้ลงนิดนึงบนมือถือ (w-20 h-20) + เพิ่มเอฟเฟกต์เด้งตอน Hover */}
+          <PancakeLogo className="w-20 h-20 sm:w-24 sm:h-24 mx-auto mb-3 sm:mb-4 drop-shadow-xl animate-fade-in transition-transform duration-500 group-hover:scale-110" />
           <h1 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight">Pancake ERP</h1>
           <p className="text-slate-400 font-medium text-[11px] sm:text-sm mt-1">Welcome back, please login to your account.</p>
         </div>
 
-        <div className="space-y-4 sm:space-y-5">
+        <div className="space-y-4 sm:space-y-5 relative z-30">
           <div>
             <label className="text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-widest mb-1.5 sm:mb-2 block ml-1">Username</label>
             <input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleLogin(e); }}
               className="w-full bg-slate-50 border border-slate-200 focus:border-pink-500 focus:ring-4 focus:ring-pink-500/10 rounded-xl px-4 sm:px-5 py-3.5 sm:py-4 text-slate-700 font-bold placeholder-slate-400 outline-none transition-all text-sm"
               placeholder="Enter your username"
             />
@@ -244,6 +286,7 @@ export default function Login() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleLogin(e); }}
               className="w-full bg-slate-50 border border-slate-200 focus:border-pink-500 focus:ring-4 focus:ring-pink-500/10 rounded-xl px-4 sm:px-5 py-3.5 sm:py-4 text-slate-700 font-bold placeholder-slate-400 outline-none transition-all text-sm"
               placeholder="••••••••"
             />
@@ -273,21 +316,30 @@ export default function Login() {
 
           <div className="pt-2 sm:pt-4 space-y-2.5 sm:space-y-3">
             <button
-              onClick={() => handleAuthenticate("/dashboard")}
-              disabled={isLoading}
+              type="button" // 👈 สำคัญมาก! ช่วยป้องกันไม่ให้หน้าเว็บรีเฟรชเอง
+              onClick={(e) => handleLogin(e)} // 👈 แก้ให้เรียกใช้ handleLogin
+              disabled={loading} // 👈 แก้ให้ใช้ state 'loading' ตรงกับด้านบน
               className="w-full py-3.5 sm:py-4 bg-gradient-to-r from-purple-600 to-pink-500 hover:from-purple-700 hover:to-pink-600 text-white rounded-xl font-bold text-sm sm:text-base shadow-[0_10px_20px_rgba(236,72,153,0.2)] transition-all transform hover:-translate-y-0.5"
             >
-              {isLoading ? 'Loading...' : '🚀 เข้าสู่ระบบ (Dashboard)'}
+              {loading ? 'Loading...' : '🚀 เข้าสู่ระบบ (Dashboard)'}
             </button>
 
             <button
-              onClick={() => handleAuthenticate("/check-in")}
-              disabled={isLoading}
+              type="button" // 👈 สำคัญมาก!
+              onClick={() => navigate("/check-in")} // 👈 แก้ให้ลิงก์ไปหน้าเช็คอินตรงๆ หรือถ้ามีฟังก์ชันอื่นก็เปลี่ยนได้ครับ
+              disabled={loading}
               className="w-full py-3.5 sm:py-4 bg-white border-2 border-slate-200 hover:border-pink-500 hover:text-pink-600 text-slate-600 rounded-xl font-bold text-sm sm:text-base shadow-sm transition-all transform hover:-translate-y-0.5 flex items-center justify-center gap-2"
             >
               ⏰ ลงเวลาทำงาน (Timestamp)
             </button>
           </div>
+
+          {/* 🌟 4. ลายเซ็นคนทำ (เท่ๆ จางๆ ท้ายการ์ด) */}
+          <div className="mt-6 pt-5 border-t border-slate-200/50 flex flex-col items-center select-none pointer-events-none opacity-40 hover:opacity-100 transition-opacity">
+            <span className="text-[8px] font-bold text-pink-500/60 uppercase tracking-[0.3em]">DEVELOPED BY</span>
+            <span className="text-[10px] font-black text-slate-700 uppercase tracking-[0.2em] mt-1.5">{String.fromCharCode(83, 105, 110, 115, 97, 114, 117, 100)} W.</span>
+          </div>
+
         </div>
       </div>
     </div>

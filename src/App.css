@@ -40,3 +40,45 @@
 .read-the-docs {
   color: #888;
 }
+
+/* 🔴 แปะไว้ในไฟล์ CSS หลักของเว็บพี่นะครับ (App.css เป็นต้น) */
+@keyframes shimmer {
+  0% {
+    left: -100%;
+    opacity: 0;
+  }
+  20% {
+    left: 100%;
+    opacity: 0.8;
+  }
+  100% {
+    left: 100%;
+    opacity: 0;
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer 2.5s infinite;
+  animation-delay: 0.5s;
+}
+
+/* 🔴 แปะไว้ล่างสุดของไฟล์ CSS หลักของเว็บพี่นะครับ (App.css เป็นต้น) */
+@keyframes shimmer {
+  0% { left: -100%; opacity: 0; }
+  20% { left: 100%; opacity: 0.8; }
+  100% { left: 100%; opacity: 0; }
+}
+
+@keyframes bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-15px); }
+}
+
+.animate-shimmer {
+  animation: shimmer 3s infinite;
+  animation-delay: 0.5s;
+}
+
+.animate-bob {
+  animation: bob 6s infinite ease-in-out;
+}
