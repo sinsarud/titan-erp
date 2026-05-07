@@ -1,8 +1,10 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "./supabase";
 import Swal from 'sweetalert2';
 import * as XLSX from 'xlsx';
+import html2canvas from 'html2canvas';
+import { jsPDF } from 'jspdf';
 
 // =====================================================================
 // 🟢 Component: จอดำแสดง Log แบบ Real-time (แยกออกมาให้ทำงานอิสระ)
@@ -203,6 +205,78 @@ const calculateTotalHours = (logs) => {
   return h > 0 ? `${h} ชม. ${m} นาที` : `${m} นาที`;
 };
 
+
+
+// =====================================================================
+// 🌤️ Component: พยากรณ์อากาศ (Weather Widget) ดึงจากตำแหน่งเครื่อง (รองรับมือถือ 100%)
+// =====================================================================
+const WeatherWidget = () => {
+  const [weather, setWeather] = React.useState({ temp: null, desc: '', icon: '⏳', location: 'กำลังค้นหา...' });
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!navigator.geolocation) {
+      setError('ไม่รองรับ GPS');
+      setLoading(false);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const lat = pos.coords.latitude;
+          const lon = pos.coords.longitude;
+          
+          const geoRes = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`);
+          const geoData = await geoRes.json();
+          const city = geoData.address?.city || geoData.address?.province || geoData.address?.state || 'ไม่ทราบตำแหน่ง';
+          
+          const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
+          const weatherData = await weatherRes.json();
+          const current = weatherData.current_weather;
+          
+          let icon = '🌤️', desc = 'ปกติ';
+          const c = current.weathercode;
+          if (c === 0) { icon = '☀️'; desc = 'แจ่มใส'; }
+          else if (c <= 3) { icon = '⛅'; desc = 'มีเมฆบางส่วน'; }
+          else if (c === 45 || c === 48) { icon = '🌫️'; desc = 'มีหมอก'; }
+          else if (c >= 51 && c <= 67) { icon = '🌧️'; desc = 'ฝนตก'; }
+          else if (c >= 80 && c <= 82) { icon = '🌦️'; desc = 'ฝนตกหนัก'; }
+          else if (c >= 95) { icon = '⛈️'; desc = 'พายุฝนฟ้าคะนอง'; }
+
+          setWeather({ temp: current.temperature, desc, icon, location: city });
+          setLoading(false);
+        } catch (err) {
+          setError('ดึงข้อมูลไม่ได้');
+          setLoading(false);
+        }
+      },
+      () => {
+        setError('ไม่ได้เปิด Location');
+        setLoading(false);
+      }
+    );
+  }, []);
+
+  return (
+    <div className="flex items-center gap-1.5 md:gap-2 bg-white/60 border border-slate-200 px-2 py-1 md:px-3 md:py-1.5 rounded-full shadow-sm backdrop-blur-md">
+      {error ? (
+        <span className="text-[9px] md:text-[10px] text-rose-500 font-bold">⚠️ {error}</span> 
+      ) : loading ? (
+        <span className="text-[9px] md:text-[10px] text-slate-500 font-bold">⏳ ดึงสภาพอากาศ...</span> 
+      ) : (
+        <>
+          <span className="text-base md:text-xl leading-none drop-shadow-sm">{weather.icon}</span>
+          <div className="flex flex-col leading-none justify-center">
+            <span className="text-[11px] md:text-[13px] font-black text-slate-700">{weather.temp}°C</span>
+            <span className="text-[8px] md:text-[9px] font-bold text-slate-500 truncate max-w-[60px] md:max-w-[80px]" title={weather.location}>{weather.location}</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -412,51 +486,7 @@ export default function Dashboard() {
     };
   }, []);
 
-// 💦 ฟังก์ชันสาดน้ำสงกรานต์
-  const triggerSongkranSplash = () => {
-    const duration = 3 * 1000; // สาดนาน 3 วินาที
-    const animationEnd = Date.now() + duration;
-    const defaults = { startVelocity: 30, spread: 360, ticks: 60, zIndex: 9999 };
-
-    const randomInRange = (min, max) => Math.random() * (max - min) + min;
-
-    const interval = setInterval(function() {
-      const timeLeft = animationEnd - Date.now();
-
-      if (timeLeft <= 0) {
-        return clearInterval(interval);
-      }
-
-      const particleCount = 50 * (timeLeft / duration);
-      
-      // สาดน้ำสีฟ้า/ขาว/ชมพู (ไม่เอาสีส้มเด็ดขาด!)
-      confetti({
-        ...defaults, 
-        particleCount, 
-        origin: { x: randomInRange(0.1, 0.3), y: Math.random() - 0.2 },
-        colors: ['#00BFFF', '#87CEFA', '#FFFFFF', '#FFB6C1'] 
-      });
-      confetti({
-        ...defaults, 
-        particleCount, 
-        origin: { x: randomInRange(0.7, 0.9), y: Math.random() - 0.2 },
-        colors: ['#00BFFF', '#87CEFA', '#FFFFFF', '#FFB6C1']
-      });
-    }, 250);
-  };  
-
-  useEffect(() => {
-    if (user) {
-      fetchAnnouncements();
-      
-      // 💦 สาดน้ำต้อนรับสงกรานต์ทันทีที่เข้าสู่ระบบ!
-      triggerSongkranSplash(); 
-    }
-  }, [user]);
-
-
-
-  
+ 
 
 const fetchAnnouncements = async () => {
     try {
@@ -526,9 +556,38 @@ const fetchAnnouncements = async () => {
   // 🗓️ State สำหรับระบบจัดตารางกะ (Shift Roster)
   const [shiftRoster, setShiftRoster] = useState({});
 
-  // ⭐️ State สำหรับระบบประเมินผลงาน (KPI)
+// ⭐️ State สำหรับระบบประเมินผลงาน (KPI)
   const [performanceReviews, setPerformanceReviews] = useState({});
   const [kpiMonth, setKpiMonth] = useState(new Date().toISOString().slice(0, 7));
+
+  // 🚀 👇 [เอาชุดนี้ไปวางแทนที่ของเก่าทั้งหมด] 👇 🚀
+  useEffect(() => {
+    const fetchKPIFromNewTable = async () => {
+      try {
+        const { data, error } = await supabase.from('employee_kpi').select('*');
+        
+        if (data) {
+          const kpiMap = {};
+          // แพ็คข้อมูลให้หน้าจอเอาไปแสดงผลต่อได้
+          data.forEach(item => {
+            kpiMap[`${item.employee_id}_${item.month}`] = {
+              grade: item.grade,
+              comment: item.comment,
+              score: item.score
+            };
+          });
+          setPerformanceReviews(kpiMap);
+        }
+      } catch (err) {
+        console.error("ดึงข้อมูล KPI ไม่สำเร็จ:", err);
+      }
+    };
+
+    // ให้ดึงข้อมูลตอนเปลี่ยนมาหน้า kpi_manager หรือโหลดแอปครั้งแรก
+    if (currentView === 'kpi_manager') {
+       fetchKPIFromNewTable();
+    }
+  }, [currentView, kpiMonth]);
 
 // 🎥 ตัวแปรสำหรับระบบลงเวลาไลฟ์ (Live Tracking)
   const [liveStreams, setLiveStreams] = useState([{ 
@@ -709,6 +768,242 @@ const [displayLimit, setDisplayLimit] = useState('ALL');
     fetchPlatforms();
    }, []);
 
+// =========================================================================
+  // 📈 LOGIC: ADS PERFORMANCE (V9 - โชว์ข้อมูลไหลต่อเนื่อง + ยอดรวมแม่นยำ 100%)
+  // =========================================================================
+  const [adsTrackData, setAdsTrackData] = useState([]);
+  const [adsFilterDate, setAdsFilterDate] = useState(''); // 👈 ปล่อยว่างเพื่อดึงข้อมูล "ทั้งหมด" มาโชว์รวดเดียว
+  const [isSavingAdsTrack, setIsSavingAdsTrack] = useState(false);
+  const [editingAdsId, setEditingAdsId] = useState(null);
+  const [adsTrackForm, setAdsTrackForm] = useState({
+    date: new Date().toISOString().split('T')[0],
+    record_time: new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }),
+    topup_amount: '',
+    balance_amount: '',
+    sales_amount: '',
+    is_new_live: false, 
+    note: ''
+  });
+
+  useEffect(() => {
+    if (currentView === 'ads_performance' && filterPlatform) {
+      const fetchAdsTrack = async () => {
+        let query = supabase
+          .from('ads_performance')
+          .select('*, employees(full_name, nickname)')
+          .eq('platform', filterPlatform);
+
+        if (adsFilterDate) {
+          query = query.eq('record_date', adsFilterDate);
+        }
+
+        // 🚀 เรียงตามวันที่ + เวลา เพื่อให้คำนวณบวกทบกันได้แม่นยำที่สุด
+        query = query.order('record_date', { ascending: false }).order('record_time', { ascending: false });
+
+        const { data, error } = await query;
+        if (!error && data) {
+          setAdsTrackData(data);
+          if (data.length > 0 && !editingAdsId) {
+            setAdsTrackForm(prev => ({ ...prev, sales_amount: data[0].sales_amount || '' }));
+          } else if (data.length === 0) {
+            setAdsTrackForm(prev => ({ ...prev, sales_amount: '' }));
+          }
+        }
+      };
+      fetchAdsTrack();
+    }
+  }, [currentView, filterPlatform, adsFilterDate]);
+
+  // 🧠 EXCEL ENGINE (ฉบับคำนวณไหลต่อเนื่อง)
+  const dynamicAdsData = useMemo(() => {
+    const sorted = [...adsTrackData].sort((a, b) => {
+      const dateA = a.record_date || '';
+      const dateB = b.record_date || '';
+      if (dateA !== dateB) return dateA.localeCompare(dateB);
+      return a.record_time.localeCompare(b.record_time);
+    });
+
+    const calculated = sorted.reduce((acc, item, idx) => {
+      const prevItem = acc[idx - 1]; 
+      const prevBal = prevItem ? (Number(prevItem.balance_amount) || 0) : 0;
+      const prevTopup = prevItem ? (Number(prevItem.topup_amount) || 0) : 0;
+      const prevTotal = prevBal + prevTopup; 
+
+      const currentBal = Number(item.balance_amount) || 0;
+      const currentTopup = Number(item.topup_amount) || 0;
+      const currentSales = Number(item.sales_amount) || 0;
+      const prevSales = prevItem ? (Number(prevItem.sales_amount) || 0) : 0;
+
+      const nextTotal = currentBal + currentTopup;
+      
+      // 🚀 คำนวณ Spend: หักลบจากยอดคงเหลือเดิมเสมอ (ห้ามตัด 0)
+      let spend = 0;
+      if (prevItem) {
+        spend = prevTotal - currentBal;
+        if (spend < 0) spend = 0; 
+      }
+
+      // 🚀 คำนวณยอดขายสุทธิ:
+      let increase = 0;
+      if (!prevItem) {
+        // 🎯 ถ้าเป็นเรคคอร์ดแรกสุด ให้ยอดสุทธิเป็น 0 (ตั้งเป็นฐานเฉยๆ)
+        increase = 0; 
+      } else if (item.is_new_live) {
+        // 🎯 ถ้าขึ้นไลฟ์ใหม่ ยอดขายเริ่มนับใหม่หมด = เอายอดที่กรอกมาเป็นกำไรเลย
+        increase = currentSales; 
+      } else {
+        // 🎯 ลอจิกปกติ: ยอดขายใหม่ - ยอดขายเดิม
+        increase = currentSales - prevSales;
+        if (increase < 0) increase = 0;
+      }
+
+      const roas = spend > 0 ? (increase / spend) : 0;
+      acc.push({ ...item, _dynamic: { spend, nextTotal, increase, roas } });
+      return acc;
+    }, []);
+    
+    return calculated.reverse(); 
+  }, [adsTrackData]);
+
+  // 📊 สรุปยอดรวม (ดึงจากข้อมูลทั้งหมดที่โชว์บนหน้าจอ)
+  const adsDailySummary = dynamicAdsData.reduce((acc, curr) => {
+    acc.totalSpend += curr._dynamic.spend;
+    acc.totalIncrease += curr._dynamic.increase;
+    return acc;
+  }, { totalSpend: 0, totalIncrease: 0 });
+  const dailyAvgRoas = adsDailySummary.totalSpend > 0 ? (adsDailySummary.totalIncrease / adsDailySummary.totalSpend) : 0;
+
+  // 🧠 เครื่องคิดเลข Preview (ตอนกำลังพิมพ์)
+  const previewAdsCalc = () => {
+    const currentTopup = Number(adsTrackForm.topup_amount) || 0;
+    const currentBal = Number(adsTrackForm.balance_amount) || 0;
+    const currentSales = Number(adsTrackForm.sales_amount) || 0;
+
+    let prev = null;
+    if (editingAdsId) {
+      const myIdx = dynamicAdsData.findIndex(item => item.id === editingAdsId);
+      prev = dynamicAdsData[myIdx + 1] || null; 
+    } else {
+      prev = dynamicAdsData.length > 0 ? dynamicAdsData[0] : null; 
+    }
+
+    const prevBal = prev ? (Number(prev.balance_amount) || 0) : 0;
+    const prevTopup = prev ? (Number(prev.topup_amount) || 0) : 0;
+    const prevTotal = prevBal + prevTopup;
+    const prevSales = prev ? (Number(prev.sales_amount) || 0) : 0;
+
+    const nextTotal = currentBal + currentTopup;
+    
+    let spend = 0;
+    if (prev) {
+        spend = prevTotal - currentBal;
+        if (spend < 0) spend = 0;
+    }
+
+    let increase = 0;
+    if (!prev) {
+        increase = 0; 
+    } else if (adsTrackForm.is_new_live) {
+        increase = currentSales;
+    } else {
+        increase = currentSales - prevSales;
+        if (increase < 0) increase = 0;
+    }
+
+    const roas = spend > 0 ? (increase / spend) : 0;
+    return { spend, nextTotal, increase, roas };
+  };
+
+  // 💾 บันทึก
+  const handleSaveAdsTrack = async (e) => {
+    e.preventDefault();
+    if (!filterPlatform) return Swal.fire('แจ้งเตือน', 'กรุณาเลือก Platform ก่อนบันทึก', 'warning');
+    if (adsTrackForm.balance_amount === '' || adsTrackForm.sales_amount === '') {
+      return Swal.fire('แจ้งเตือน', 'กรุณากรอก ยอดคงเหลือ และ ยอดขายตะกร้า', 'warning');
+    }
+
+    setIsSavingAdsTrack(true);
+    try {
+      const calc = previewAdsCalc();
+      const payload = {
+        platform: filterPlatform, 
+        record_date: adsTrackForm.date || new Date().toISOString().slice(0, 10), // 👈 บันทึกวันที่จากฟอร์ม
+        record_time: adsTrackForm.record_time,
+        topup_amount: Number(adsTrackForm.topup_amount) || 0, 
+        balance_amount: Number(adsTrackForm.balance_amount) || 0, 
+        sales_amount: Number(adsTrackForm.sales_amount) || 0, 
+        is_new_live: adsTrackForm.is_new_live, 
+        ad_spend: calc.spend, sales_increase: calc.increase, roas: calc.roas, note: adsTrackForm.note || '', created_by: user.id
+      };
+
+      if (editingAdsId) {
+        await supabase.from('ads_performance').update(payload).eq('id', editingAdsId);
+        Swal.fire({ icon: 'success', title: 'แก้ไขสำเร็จ', toast: true, position: 'top-end', showConfirmButton: false, timer: 1500 });
+      } else {
+        await supabase.from('ads_performance').insert([payload]);
+        Swal.fire({ icon: 'success', title: 'บันทึกสำเร็จ', toast: true, position: 'top-end', showConfirmButton: false, timer: 1500 });
+      }
+
+      let query = supabase.from('ads_performance').select('*, employees(full_name, nickname)').eq('platform', filterPlatform);
+      if (adsFilterDate) query = query.eq('record_date', adsFilterDate);
+      const { data: newData } = await query.order('record_date', { ascending: false }).order('record_time', { ascending: false });
+      
+      if (newData) setAdsTrackData(newData);
+      
+      setAdsTrackForm(prev => ({ 
+        date: prev.date, 
+        record_time: new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }), 
+        topup_amount: '', balance_amount: '', sales_amount: prev.sales_amount, is_new_live: false, note: '' 
+      }));
+      setEditingAdsId(null);
+    } catch (err) { Swal.fire('ข้อผิดพลาด', err.message, 'error'); } finally { setIsSavingAdsTrack(false); }
+  };
+
+  // 🗑️ ลบ
+  const handleDeleteAdsTrack = async (id) => {
+    const res = await Swal.fire({ title: 'ลบรายการนี้?', icon: 'warning', showCancelButton: true, confirmButtonColor: '#ef4444', confirmButtonText: 'ลบทิ้ง', customClass: { popup: 'rounded-[2rem]' } });
+    if (res.isConfirmed) {
+      Swal.fire({ title: 'กำลังลบ...', didOpen: () => Swal.showLoading() });
+      const { error } = await supabase.from('ads_performance').delete().eq('id', id);
+      if (!error) {
+        setAdsTrackData(prev => prev.filter(item => item.id !== id));
+        Swal.fire({ icon: 'success', title: 'ลบสำเร็จ', toast: true, position: 'top-end', showConfirmButton: false, timer: 1500 });
+      }
+    }
+  };
+
+  // 📥 Export Excel
+  const exportAdsPerformance = () => {
+    if (dynamicAdsData.length === 0) return Swal.fire('แจ้งเตือน', 'ไม่มีข้อมูลสำหรับ Export', 'warning');
+    Swal.fire({ title: 'กำลังเตรียมไฟล์ Excel...', didOpen: () => Swal.showLoading() });
+    try {
+      const excelData = [...dynamicAdsData].reverse().map((item) => {
+        return {
+          'วันที่': item.record_date || '-',
+          'เวลา': item.record_time.slice(0, 5) + ' น.',
+          'เติมเงิน (+)': Number(item.topup_amount),
+          'ยอดคงเหลือ': Number(item.balance_amount),
+          'ยอดรวมหลังเติมเงิน': item._dynamic.nextTotal,
+          'แอดกินไป (-)': item._dynamic.spend,
+          'ยอดขาย': Number(item.sales_amount) + (item.is_new_live ? ' (เริ่มไลฟ์ใหม่)' : ''),
+          'ยอดสุทธิ': item._dynamic.increase,
+          'ROAS': item._dynamic.roas.toFixed(2) + 'x',
+          'หมายเหตุ': item.note || '-',
+          'ผู้บันทึก': item.employees?.nickname || item.employees?.full_name?.split(' ')[0]
+        };
+      });
+
+      const worksheet = XLSX.utils.json_to_sheet(excelData);
+      worksheet['!cols'] = [{wch: 12}, {wch: 10}, {wch: 15}, {wch: 15}, {wch: 20}, {wch: 15}, {wch: 25}, {wch: 15}, {wch: 10}, {wch: 30}, {wch: 15}];
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Ads_Performance");
+      XLSX.writeFile(workbook, `Ads_Report_${filterPlatform}_${adsFilterDate || 'All'}.xlsx`);
+      Swal.close();
+    } catch (err) { Swal.fire('Error', 'ไม่สามารถ Export ได้: ' + err.message, 'error'); }
+  };
+
+
+
   // ⚙️ State Dropdown เมนูตั้งค่าระบบ
   const [isSettingsDropdownOpen, setIsSettingsDropdownOpen] = useState(false);
 
@@ -856,16 +1151,19 @@ const [empForm, setEmpForm] = useState({
     setEmpForm({ ...empForm, password: pass, require_password_change: true });
     setShowPassword(true); // โชว์รหัสให้แอดมินเห็นชั่วคราวจะได้ก๊อปไปส่งให้พนักงานได้
   };
-  //ระบบ ประวัติการลาทั้งหมด" (เฉพาะ Admin / CEO)
+
+//ระบบ ประวัติการลาทั้งหมด" (เฉพาะ Admin / CEO)
   const [allEmpLeaves, setAllEmpLeaves] = useState([]);
   const [empLeaveSearch, setEmpLeaveSearch] = useState("");
   const [viewMapModal, setViewMapModal] = useState(null);
-
   const [allLeavesTypeFilter, setAllLeavesTypeFilter] = useState("ALL");
   const [allLeavesStatusFilter, setAllLeavesStatusFilter] = useState("ALL");
-  //ระบบแจ้งวันหยุดประจำสัปดาห์ ของ Part-Time
+  const [leaveSearchDate, setLeaveSearchDate] = useState(""); // ✨ เพิ่มตัวแปรค้นหาวันที่ลา
+
+//ระบบแจ้งวันหยุดประจำสัปดาห์ ของ Part-Time
   const [dayoffSearchName, setDayoffSearchName] = useState("");
   const [dayoffFilterStatus, setDayoffFilterStatus] = useState("ALL");
+  const [dayoffSearchDate, setDayoffSearchDate] = useState(""); // ✨ เพิ่มตัวแปรนี้เข้าไปครับ
 
 // 🛠️ State สำหรับหน้าประวัติแจ้งปรับปรุงทั้งหมด (Admin)
   const [allEmpAdjustments, setAllEmpAdjustments] = useState([]);
@@ -1671,6 +1969,8 @@ const handleSaveEmployee = async (e) => {
   const [isLoadingAttendance, setIsLoadingAttendance] = useState(false);
   const [attnFilterStatus, setAttnFilterStatus] = useState("ALL");
   const [attnSearchName, setAttnSearchName] = useState("");
+  const [attnSearchDate, setAttnSearchDate] = useState("");
+
 
 // 🟢 ส่วนที่อัปเกรด: โหลดรายชื่อพนักงาน และตั้งตัวดักฟังเพื่อให้ชื่ออัปเดตอัตโนมัติ
   useEffect(() => {
@@ -2467,74 +2767,308 @@ const fetchAttendanceData = async () => {
     } catch (err) { console.error("Victory Email Error:", err.message); }
   };
 
-// 📲 ฟังก์ชันส่ง e-Slip ผ่าน LINE OA
-  const handleSendSlipLine = async (slip) => {
+// 📧 ฟังก์ชันส่ง e-Slip ผ่าน Email (แบบแนบ PDF หน้าตาเป๊ะตามฟอร์มบริษัท + ลายเซ็น)
+  const handleSendSlipEmail = async (slip) => {
     try {
       const emp = employees.find((e) => e.id === slip.employee_id) || slip.employees || {};
       if (!emp.full_name) throw new Error("ไม่พบข้อมูลพนักงาน");
+      if (!emp.email) throw new Error("พนักงานคนนี้ไม่มี Email ในระบบ กรุณาอัปเดตก่อนส่ง");
 
-      Swal.fire({ title: 'กำลังส่ง e-Slip เข้า LINE...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      Swal.fire({ title: 'กำลังสร้างเอกสาร PDF และส่ง Email...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
-      const netSalary = Number(slip.net_salary).toLocaleString(undefined, {minimumFractionDigits: 2});
-      const monthStr = slip.month; 
+      // 1. แปลงเดือนเป็นภาษาไทย
+      const [year, month] = slip.month.split('-');
+      const thaiMonths = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
+      const monthTH = `${thaiMonths[parseInt(month) - 1]} ${parseInt(year) + 543}`;
       
-      const flexMessage = {
-        type: "flex",
-        altText: `สลิปเงินเดือนของคุณ ${emp.full_name} (รอบ ${monthStr})`,
-        contents: {
-          type: "bubble",
-          size: "mega",
-          header: {
-            type: "box", layout: "vertical", backgroundColor: "#10b981",
-            contents: [{ type: "text", text: `💸 e-Slip: รอบ ${monthStr}`, weight: "bold", color: "#FFFFFF", size: "md" }]
-          },
-          body: {
-            type: "box", layout: "vertical", spacing: "md",
-            contents: [
-              { type: "box", layout: "horizontal", contents: [{ type: "text", text: "พนักงาน:", color: "#aaaaaa", size: "sm", flex: 1 }, { type: "text", text: emp.full_name, color: "#333333", size: "sm", flex: 2, weight: "bold" }] },
-              { type: "box", layout: "horizontal", contents: [{ type: "text", text: "เงินได้สุทธิ:", color: "#aaaaaa", size: "sm", flex: 1 }, { type: "text", text: `฿ ${netSalary}`, color: "#10b981", size: "lg", flex: 2, weight: "bold" }] },
-              { type: "separator", margin: "md" },
-              { type: "text", text: "กรุณาตรวจสอบรายละเอียดฉบับเต็มในระบบ PANCAKE ERP", color: "#aaaaaa", size: "xs", wrap: true, margin: "md", align: "center" }
-            ]
-          }
+      const today = new Date();
+      const payDate = `${today.getDate()} ${thaiMonths[today.getMonth()]} ${today.getFullYear() + 543}`;
+
+      // 2. สรุปยอดรวม
+      const totalEarnings = Number(slip.base_salary || 0) + Number(slip.ot_amount || 0) + Number(slip.bonus || 0) + Number(slip.commission || 0);
+      const leaveDeduct = Number(slip.leave_deduction || 0);
+      const lateDeduct = Number(slip.late_deduction || slip.manual_late_deduct || 0);
+      const absDeduct = Number(slip.absence_deduction || 0);
+      const ssoDeduct = Number(slip.social_security || slip.social_security_deduction || 0);
+      const taxDeduct = Number(slip.tax || slip.tax_deduction || 0);
+      const otherDeduct = Number(slip.deductions || 0);
+      const totalDeductions = leaveDeduct + lateDeduct + absDeduct + ssoDeduct + taxDeduct + otherDeduct;
+
+      // ✅ 3. URL รูปภาพ (สำหรับส่งให้ GAS ไปแปะใน PDF)
+      const logoUrl = 'https://qdqmbnztfdrfqtdzyxno.supabase.co/storage/v1/object/public/assets/S__33193987.png';
+      const signatureUrl = 'https://qdqmbnztfdrfqtdzyxno.supabase.co/storage/v1/object/public/assets/2026-04-23_18-25-39.png';
+
+      // 4. เตรียม Payload
+      const slipDataPayload = {
+        action: 'send_payslip_pdf',
+        data: {
+          to: emp.email,
+          subject: `💸 สลิปเงินเดือนรอบ ${monthTH} (คุณ ${emp.full_name})`,
+          empName: emp.full_name,
+          empCode: emp.employee_code || "-",
+          position: emp.position || "Staff",
+          salaryType: emp.salary_type || "พนักงานประจำ",
+          monthTH: monthTH,
+          payDate: payDate,
+          baseSalary: Number(slip.base_salary || 0),
+          ot: Number(slip.ot_amount || 0),
+          bonus: Number(slip.bonus || 0),
+          commission: Number(slip.commission || 0),
+          leaveDeduct: leaveDeduct,
+          lateDeduct: lateDeduct,
+          absenceDeduct: absDeduct,
+          ssoDeduct: ssoDeduct,
+          taxDeduct: taxDeduct,
+          otherDeduct: otherDeduct,
+          totalEarnings: totalEarnings,
+          totalDeductions: totalDeductions,
+          netSalary: Number(slip.net_salary || 0),
+          // ✅ ส่งลิงก์รูปไปด้วย
+          logoUrl: logoUrl,
+          signatureUrl: signatureUrl
         }
       };
 
       await fetch("https://script.google.com/macros/s/AKfycbxBMRd9gKYzHU7Pz0-189-BOYVb15eS7PmF9zKiUYCiHlDUhjpe39vi7Y3Vx1sMr2VEoA/exec", {
         method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({ to: [lineAdminId || "C0df0123907f46aa88c44ef72e88ea30f"], messages: [flexMessage] })
+        body: JSON.stringify(slipDataPayload)
       });
 
-      Swal.fire({ icon: 'success', title: 'ส่ง e-Slip สำเร็จ!', text: 'แจ้งเตือนสลิปเงินเดือนผ่าน LINE OA เรียบร้อยแล้ว', showConfirmButton: false, timer: 2000, customClass: { popup: 'rounded-[2rem]' } });
+      Swal.fire({ icon: 'success', title: 'ส่ง PDF สำเร็จ!', text: 'ระบบได้สร้างสลิป PDF และส่งเข้า Email พนักงานเรียบร้อย', showConfirmButton: false, timer: 2500, customClass: { popup: 'rounded-[2rem]' } });
     } catch (err) {
       Swal.fire('Error', err.message, 'error');
     }
   };
 
 
-// 🖨️ ฟังก์ชันพิมพ์สลิปเงินเดือน (Corporate Style + โลโก้ + วันที่ไทย + ซ่อนการมาทำงาน + แปลงประเภทการจ้าง)
+// 📥 ฟังก์ชันสำหรับดาวน์โหลดสลิปเป็น PDF ลงเครื่องทันที (แอบวาดหลังบ้าน + แก้บรรทัดเบี้ยว 100%)
+  const handleDirectDownload = (slip) => {
+    if (typeof Swal !== 'undefined') {
+      Swal.fire({
+        title: 'กำลังสร้างไฟล์ PDF...',
+        text: 'กรุณารอสักครู่ ระบบกำลังวาดสลิปเงินเดือน',
+        allowOutsideClick: false,
+        didOpen: () => Swal.showLoading()
+      });
+    }
+
+    setTimeout(async () => {
+      try {
+        const emp = employees.find((e) => e.id === slip.employee_id) || slip.employees || {};
+        const formatNum = (num) => Number(num || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+        // 💰 1. คำนวณรายได้และรายการหัก
+        const baseSalary = Number(slip.base_salary || 0);
+        const otAmount = Number(slip.ot_amount || 0);
+        const commission = Number(slip.commission || 0);
+        const bonus = Number(slip.bonus || 0);
+        const totalEarnings = baseSalary + otAmount + commission + bonus;
+
+        const leaveDeduct = Number(slip.leave_deduction || 0);
+        const lateDeduct = Number(slip.late_deduction || slip.manual_late_deduct || 0);
+        const absDeduct = Number(slip.absence_deduction || 0);
+        const ssoDeduct = Number(slip.social_security || slip.social_security_deduction || 0);
+        const taxDeduct = Number(slip.tax || slip.tax_deduction || 0);
+        const otherDeduct = Number(slip.deductions || 0);
+        const totalDeductions = leaveDeduct + lateDeduct + absDeduct + ssoDeduct + taxDeduct + otherDeduct;
+        
+        const netSalary = totalEarnings - totalDeductions;
+
+        // 📅 2. จัดรูปแบบวันที่
+        const thaiMonths = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
+        const [yearStr, monthStr] = (slip.month || "").split('-');
+        const formattedMonth = (yearStr && monthStr) ? `${thaiMonths[parseInt(monthStr, 10) - 1]} ${parseInt(yearStr, 10) + 543}` : slip.month;
+        
+        const today = new Date();
+        const formattedPayDate = `${today.getDate()} ${thaiMonths[today.getMonth()]} ${today.getFullYear() + 543}`;
+        const salaryTypeThai = slip.salary_type === 'Part-time' ? 'พนักงานพาร์ทไทม์' : 'พนักงานประจำ';
+
+        // 📦 3. แอบสร้างกล่อง HTML ไว้หลังบ้าน
+        const container = document.createElement('div');
+        container.style.position = 'absolute';
+        container.style.left = '-9999px';
+        container.style.top = '-9999px';
+        container.style.background = '#ffffff';
+
+        // วาดหน้าตาสลิป (ปรับ CSS ใช้ Position Absolute ล็อคเส้น)
+        container.innerHTML = `
+          <style>
+            @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap');
+            .temp-slip-container { font-family: 'Sarabun', sans-serif; padding: 40px; background: #fff; color: #000; font-size: 14px; width: 800px; box-sizing: border-box; }
+            .header { display: flex; align-items: center; border-bottom: 2px solid #000; padding-bottom: 20px; margin-bottom: 25px; }
+            .logo-container { width: 90px; height: 90px; margin-right: 20px; display: flex; align-items: center; justify-content: center; }
+            .company-logo { max-width: 100%; max-height: 100%; object-fit: contain; }
+            .company-info h1 { margin: 0; font-size: 24px; font-weight: 700; color: #000; letter-spacing: 0.5px; }
+            .company-info h2 { margin: 4px 0 0; font-size: 16px; font-weight: 600; color: #333; }
+            .doc-title { text-align: center; font-size: 18px; font-weight: 700; margin: 20px 0; text-decoration: underline; letter-spacing: 1px; }
+            .info-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+            .info-table td { padding: 5px 10px; vertical-align: top; }
+            .main-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; border: 1px solid #000; }
+            .main-table th, .main-table td { border: 1px solid #000; padding: 0; }
+            .main-table th { background-color: #f4f4f4; text-align: center; font-weight: 700; padding: 10px; font-size: 15px; }
+            .inner-table { width: 100%; border-collapse: collapse; height: 100%; }
+            .inner-table td { border: none; padding: 8px 12px; }
+            .inner-table .amount { text-align: right; }
+            .summary-row { font-weight: 700; background-color: #f9f9f9; }
+            .summary-row > td > .inner-table > tbody > tr > td { border-top: 1px solid #000 !important; padding: 12px; }
+            
+            /* 🟢 แกะโครงสร้างบรรทัดสุดท้ายใหม่ */
+            .net-pay { text-align: right; font-size: 18px; font-weight: 700; padding: 15px 20px; border: 1px solid #000; background-color: #f4f4f4; margin-top: -1px; }
+            
+            .amount-wrapper { 
+              position: relative; 
+              display: inline-block; 
+              margin-left: 15px; 
+            }
+            .amount-line { 
+              position: absolute; 
+              bottom: -6px; /* 📍 ดันเส้นคู่ลงไปข้างล่างโดยไม่เบียดตัวอักษร */
+              left: 0; 
+              width: 100%; 
+              border-bottom: 4px double #000; 
+            }
+            
+            .signature-section { display: flex; justify-content: space-between; margin-top: 60px; text-align: center; padding: 0 30px; }
+            .sign-box { width: 250px; }
+            .sign-line { border-bottom: 1px dashed #000; margin-bottom: 12px; height: 30px; }
+            .sign-text { font-size: 14px; font-weight: 600; margin: 0; }
+            .sign-sub { font-size: 12px; color: #555; margin-top: 5px; }
+          </style>
+          <div class="temp-slip-container" id="slip-capture-area">
+            <div class="header">
+              <div class="logo-container">
+                <img src="https://i.postimg.cc/2y5NSmB4/S-33193987.png" class="company-logo" crossorigin="anonymous" />
+              </div>
+              <div class="company-info">
+                <h1>บริษัท แพนเค้ก เลิฟลี่ เอ็นริชเม้นท์ จำกัด</h1>
+                <h2>PANCAKE LOVELY ENRICHMENT CO., LTD.</h2>
+              </div>
+            </div>
+            <div class="doc-title">ใบจ่ายเงินเดือน / PAYSLIP</div>
+            <table class="info-table">
+              <tr><td width="15%"><strong>รหัสพนักงาน:</strong></td><td width="35%">${emp.employee_code || '-'}</td><td width="15%"><strong>งวดเดือน:</strong></td><td width="35%">${formattedMonth}</td></tr>
+              <tr><td><strong>ชื่อ-สกุล:</strong></td><td>${emp.full_name || '-'}</td><td><strong>วันที่จ่าย:</strong></td><td>${formattedPayDate}</td></tr>
+              <tr><td><strong>ตำแหน่ง:</strong></td><td>${emp.position || '-'}</td><td><strong>ประเภทการจ้าง:</strong></td><td>${salaryTypeThai}</td></tr>
+            </table>
+            <table class="main-table">
+              <tr><th width="50%">รายได้ (Earnings)</th><th width="50%">รายการหัก (Deductions)</th></tr>
+              <tr>
+                <td style="vertical-align: top;">
+                  <table class="inner-table">
+                    <tr><td>เงินเดือน (Base Salary)</td><td class="amount">${formatNum(baseSalary)}</td></tr>
+                    ${otAmount > 0 ? `<tr><td>ค่าล่วงเวลา (OT)</td><td class="amount">${formatNum(otAmount)}</td></tr>` : ''}
+                    ${commission > 0 ? `<tr><td>ค่าคอมมิชชัน (Commission)</td><td class="amount">${formatNum(commission)}</td></tr>` : ''}
+                    ${bonus > 0 ? `<tr><td>โบนัส/เบี้ยขยัน (Allowance)</td><td class="amount">${formatNum(bonus)}</td></tr>` : ''}
+                  </table>
+                </td>
+                <td style="vertical-align: top;">
+                  <table class="inner-table">
+                    <tr><td>หักวันลา (Leave)</td><td class="amount">${formatNum(leaveDeduct)}</td></tr>
+                    <tr><td>หักมาสาย (Late)</td><td class="amount">${formatNum(lateDeduct)}</td></tr>
+                    <tr><td>หักขาดงาน (Absence)</td><td class="amount">${formatNum(absDeduct)}</td></tr>
+                    <tr><td>หักประกันสังคม (SSO)</td><td class="amount">${formatNum(ssoDeduct)}</td></tr>
+                    <tr><td>หักภาษี ณ ที่จ่าย (Tax)</td><td class="amount">${formatNum(taxDeduct)}</td></tr>
+                    ${otherDeduct > 0 ? `<tr><td>รายการหักอื่นๆ (Others)</td><td class="amount">${formatNum(otherDeduct)}</td></tr>` : ''}
+                  </table>
+                </td>
+              </tr>
+              <tr class="summary-row">
+                <td><table class="inner-table"><tr><td><strong>รวมรายได้ (Total Earnings)</strong></td><td class="amount"><strong>${formatNum(totalEarnings)}</strong></td></tr></table></td>
+                <td><table class="inner-table"><tr><td><strong>รวมรายการหัก (Total Deductions)</strong></td><td class="amount"><strong>${formatNum(totalDeductions)}</strong></td></tr></table></td>
+              </tr>
+            </table>
+            
+            <div class="net-pay">
+              <span>เงินได้สุทธิ (Net Pay)</span>
+              <div class="amount-wrapper">
+                ฿ ${formatNum(netSalary)}
+                <span class="amount-line"></span>
+              </div>
+            </div>
+
+            <div class="signature-section">
+              <div class="sign-box"><div class="sign-line"></div><p class="sign-text">ผู้รับเงิน (Employee)</p><p class="sign-sub">วันที่ ....... / ....... / ...........</p></div>
+              <div class="sign-box"><div class="sign-line"></div><p class="sign-text">ผู้จ่ายเงิน (Authorized Signature)</p><p class="sign-sub">บริษัท แพนเค้ก เลิฟลี่ เอ็นริชเม้นท์ จำกัด</p></div>
+            </div>
+          </div>
+        `;
+
+        document.body.appendChild(container);
+
+        // หน่วงเวลาให้เบราว์เซอร์โหลดฟอนต์และรูปภาพให้สมบูรณ์ก่อนถ่ายรูป
+        await new Promise(r => setTimeout(r, 800));
+
+        const captureTarget = document.getElementById('slip-capture-area');
+
+        // 📸 4. ถ่ายรูปแปลงเป็น PDF
+        const canvas = await html2canvas(captureTarget, {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: '#ffffff',
+          logging: false
+        });
+
+        const imgData = canvas.toDataURL('image/png');
+        const pdf = new jsPDF({
+          orientation: canvas.width > canvas.height ? 'landscape' : 'portrait',
+          unit: 'px',
+          format: [canvas.width, canvas.height]
+        });
+
+        pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
+        const fileName = `Payslip_${slip.month}_${emp.employee_code || 'EMP'}.pdf`;
+        pdf.save(fileName);
+
+        // 🧹 5. ลบกล่องหลังบ้านทิ้ง และปิดแจ้งเตือน
+        document.body.removeChild(container);
+        if (typeof Swal !== 'undefined') Swal.close();
+
+      } catch (error) {
+        console.error("PDF Download Error:", error);
+        if (typeof Swal !== 'undefined') {
+          Swal.fire('ข้อผิดพลาด', 'ไม่สามารถสร้างไฟล์ PDF ได้', 'error');
+        }
+      }
+    }, 100);
+  };  
+
+// 🖨️ ฟังก์ชันพิมพ์สลิปเงินเดือน (Corporate Style + รองรับเศษสตางค์ + ดึงยอดหัก SSO/Tax อัตโนมัติ)
   const handlePrintSlip = (slip) => {
     const emp = employees.find((e) => e.id === slip.employee_id) || slip.employees || {};
     
-    // คำนวณผลรวม
-    const totalEarnings = Number(slip.base_salary) + Number(slip.ot_amount || 0) + Number(slip.commission || 0) + Number(slip.bonus || 0);
-    const totalDeductions = Number(slip.leave_deduction || 0) + Number(slip.late_deduction || 0) + Number(slip.absence_deduction || 0) + Number(slip.social_security_deduction || 0) + Number(slip.tax_deduction || 0) + Number(slip.deductions || 0);
-    const netSalary = Number(slip.net_salary);
+    // ฟังก์ชันช่วยจัด Format ตัวเลขให้มีทศนิยม 2 ตำแหน่งเสมอ
+    const formatNum = (num) => Number(num || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    // 💰 1. ดึงและคำนวณยอดรายได้ (รองรับทศนิยม)
+    const baseSalary = Number(slip.base_salary || 0);
+    const otAmount = Number(slip.ot_amount || 0);
+    const commission = Number(slip.commission || 0);
+    const bonus = Number(slip.bonus || 0);
+    const totalEarnings = baseSalary + otAmount + commission + bonus;
+    
+    // 🔻 2. ดึงยอดหัก (ใช้ชื่อตัวแปรเดียวกับใน Database เพื่อให้ยอดไม่เป็น 0.00)
+    const leaveDeduct = Number(slip.leave_deduction || 0);
+    const lateDeduct = Number(slip.late_deduction || slip.manual_late_deduct || 0);
+    const absDeduct = Number(slip.absence_deduction || 0);
+    const ssoDeduct = Number(slip.social_security || 0); // ดึงจากคอลัมน์ social_security
+    const taxDeduct = Number(slip.tax || 0);             // ดึงจากคอลัมน์ tax
+    const otherDeduct = Number(slip.deductions || 0);
+    
+    // คำนวณผลรวมหักใหม่แบบสดๆ เพื่อรักษาทศนิยม
+    const totalDeductions = leaveDeduct + lateDeduct + absDeduct + ssoDeduct + taxDeduct + otherDeduct;
+    
+    // 💵 3. ยอดรับสุทธิ (คำนวณใหม่จากยอดข้างบนเพื่อให้เศษสตางค์ตรงกันเป๊ะ)
+    const netSalary = totalEarnings - totalDeductions;
 
     // ✨ ระบบแปลงวันที่และเดือนเป็นภาษาไทย
     const thaiMonths = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
-    
-    // 1. แปลงงวดเดือน (เช่น 2026-03 -> มีนาคม 2569)
     const [yearStr, monthStr] = (slip.month || "").split('-');
     const formattedMonth = (yearStr && monthStr) 
         ? `${thaiMonths[parseInt(monthStr, 10) - 1]} ${parseInt(yearStr, 10) + 543}`
         : slip.month;
 
-    // 2. แปลงวันที่จ่าย (เช่น 7/3/2569 -> 7 มีนาคม 2569)
     const today = new Date();
     const formattedPayDate = `${today.getDate()} ${thaiMonths[today.getMonth()]} ${today.getFullYear() + 543}`;
-
-    // ✨ 3. แปลงประเภทการจ้างเป็นภาษาไทย
     const salaryTypeThai = slip.salary_type === 'Part-time' ? 'พนักงานพาร์ทไทม์' : 'พนักงานประจำ';
 
     const printContent = `
@@ -2546,7 +3080,6 @@ const fetchAttendanceData = async () => {
             body { font-family: 'Sarabun', sans-serif; padding: 0; margin: 0; background: #fff; color: #000; font-size: 14px; }
             .slip-container { max-width: 800px; margin: 20px auto; padding: 40px; border: 1px solid #ddd; background: #fff; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
             
-            /* Header */
             .header { display: flex; align-items: center; border-bottom: 2px solid #000; padding-bottom: 20px; margin-bottom: 25px; }
             .logo-container { width: 90px; height: 90px; margin-right: 20px; display: flex; align-items: center; justify-content: center; }
             .company-logo { max-width: 100%; max-height: 100%; object-fit: contain; }
@@ -2555,29 +3088,23 @@ const fetchAttendanceData = async () => {
             
             .doc-title { text-align: center; font-size: 18px; font-weight: 700; margin: 20px 0; text-decoration: underline; letter-spacing: 1px; }
             
-            /* Employee Info */
             .info-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
             .info-table td { padding: 5px 10px; vertical-align: top; }
             
-            /* Main Table */
             .main-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; border: 1px solid #000; }
             .main-table th, .main-table td { border: 1px solid #000; padding: 0; }
             .main-table th { background-color: #f4f4f4; text-align: center; font-weight: 700; padding: 10px; font-size: 15px; }
             
-            /* Inner Table for alignment */
             .inner-table { width: 100%; border-collapse: collapse; height: 100%; }
             .inner-table td { border: none; padding: 8px 12px; }
             .inner-table .amount { text-align: right; }
             
-            /* Summary Row */
             .summary-row { font-weight: 700; background-color: #f9f9f9; }
             .summary-row > td > .inner-table > tbody > tr > td { border-top: 1px solid #000 !important; padding: 12px; }
             
-            /* Net Pay */
             .net-pay { text-align: right; font-size: 18px; font-weight: 700; padding: 15px 20px; border: 1px solid #000; background-color: #f4f4f4; margin-top: -1px; }
             .net-pay .amount-value { border-bottom: 4px double #000; margin-left: 15px; padding-bottom: 2px; }
             
-            /* Signatures */
             .signature-section { display: flex; justify-content: space-between; margin-top: 60px; text-align: center; padding: 0 30px; }
             .sign-box { width: 250px; }
             .sign-line { border-bottom: 1px dashed #000; margin-bottom: 12px; height: 30px; }
@@ -2596,10 +3123,10 @@ const fetchAttendanceData = async () => {
             <div class="header">
               <div class="logo-container">
                 <img 
-                  src="https://i.ibb.co/7m2PxBf/pancake-logo.png" 
+                  src="https://i.postimg.cc/2y5NSmB4/S-33193987.png" 
                   class="company-logo" 
                   alt="Company Logo" 
-                  onerror="this.src='https://i.ibb.co/xZ2fYh6/logo.png'"
+                  onerror="this.src='https://cdn-icons-png.flaticon.com/512/3135/3135679.png'"
                 />
               </div>
               <div class="company-info">
@@ -2639,33 +3166,35 @@ const fetchAttendanceData = async () => {
               <tr>
                 <td style="vertical-align: top;">
                   <table class="inner-table">
-                    <tr><td>เงินเดือน (Base Salary)</td><td class="amount">${Number(slip.base_salary).toLocaleString(undefined, {minimumFractionDigits: 2})}</td></tr>
-                    ${Number(slip.ot_amount) > 0 ? `<tr><td>ค่าล่วงเวลา (OT)</td><td class="amount">${Number(slip.ot_amount).toLocaleString(undefined, {minimumFractionDigits: 2})}</td></tr>` : ''}
-                    ${Number(slip.commission) > 0 ? `<tr><td>คอมมิชชัน (Commission)</td><td class="amount">${Number(slip.commission).toLocaleString(undefined, {minimumFractionDigits: 2})}</td></tr>` : ''}
-                    ${Number(slip.bonus) > 0 ? `<tr><td>โบนัส/เบี้ยขยัน (Allowance)</td><td class="amount">${Number(slip.bonus).toLocaleString(undefined, {minimumFractionDigits: 2})}</td></tr>` : ''}
+                    <tr><td>เงินเดือน (Base Salary)</td><td class="amount">${formatNum(baseSalary)}</td></tr>
+                    ${otAmount > 0 ? `<tr><td>ค่าล่วงเวลา (OT)</td><td class="amount">${formatNum(otAmount)}</td></tr>` : ''}
+                    ${commission > 0 ? `<tr><td>ค่าคอมมิชชัน (Commission)</td><td class="amount">${formatNum(commission)}</td></tr>` : ''}
+                    ${bonus > 0 ? `<tr><td>โบนัส/เบี้ยขยัน (Allowance)</td><td class="amount">${formatNum(bonus)}</td></tr>` : ''}
                   </table>
                 </td>
                 <td style="vertical-align: top;">
                   <table class="inner-table">
-                    <tr><td>หักวันลา (Leave)</td><td class="amount">${Number(slip.leave_deduction).toLocaleString(undefined, {minimumFractionDigits: 2})}</td></tr>
-                    <tr><td>หักมาสาย (Late)</td><td class="amount">${Number(slip.late_deduction).toLocaleString(undefined, {minimumFractionDigits: 2})}</td></tr>
-                    <tr><td>หักขาดงาน (Absence)</td><td class="amount">${Number(slip.absence_deduction).toLocaleString(undefined, {minimumFractionDigits: 2})}</td></tr>
+                    <tr><td>หักวันลา (Leave)</td><td class="amount">${formatNum(leaveDeduct)}</td></tr>
+                    <tr><td>หักมาสาย (Late)</td><td class="amount">${formatNum(lateDeduct)}</td></tr>
+                    <tr><td>หักขาดงาน (Absence)</td><td class="amount">${formatNum(absDeduct)}</td></tr>
                     
-                    ${Number(slip.social_security_deduction) > 0 ? `<tr><td>ประกันสังคม (SSO)</td><td class="amount">${Number(slip.social_security_deduction).toLocaleString(undefined, {minimumFractionDigits: 2})}</td></tr>` : ''}
-                    ${Number(slip.tax_deduction) > 0 ? `<tr><td>ภาษีหัก ณ ที่จ่าย (Tax)</td><td class="amount">${Number(slip.tax_deduction).toLocaleString(undefined, {minimumFractionDigits: 2})}</td></tr>` : ''}
-                    ${Number(slip.deductions) > 0 ? `<tr><td>รายการหักอื่นๆ (Others)</td><td class="amount">${Number(slip.deductions).toLocaleString(undefined, {minimumFractionDigits: 2})}</td></tr>` : ''}
+                    
+                    <tr><td>หักประกันสังคม (SSO)</td><td class="amount">${formatNum(ssoDeduct)}</td></tr>
+                    <tr><td>หักภาษี ณ ที่จ่าย (Tax)</td><td class="amount">${formatNum(taxDeduct)}</td></tr>
+                    
+                    ${otherDeduct > 0 ? `<tr><td>รายการหักอื่นๆ (Others)</td><td class="amount">${formatNum(otherDeduct)}</td></tr>` : ''}
                   </table>
                 </td>
               </tr>
               <tr class="summary-row">
                 <td>
                   <table class="inner-table">
-                    <tr><td><strong>รวมรายได้ (Total Earnings)</strong></td><td class="amount"><strong>${totalEarnings.toLocaleString(undefined, {minimumFractionDigits: 2})}</strong></td></tr>
+                    <tr><td><strong>รวมรายได้ (Total Earnings)</strong></td><td class="amount"><strong>${formatNum(totalEarnings)}</strong></td></tr>
                   </table>
                 </td>
                 <td>
                   <table class="inner-table">
-                    <tr><td><strong>รวมรายการหัก (Total Deductions)</strong></td><td class="amount"><strong>${totalDeductions.toLocaleString(undefined, {minimumFractionDigits: 2})}</strong></td></tr>
+                    <tr><td><strong>รวมรายการหัก (Total Deductions)</strong></td><td class="amount"><strong>${formatNum(totalDeductions)}</strong></td></tr>
                   </table>
                 </td>
               </tr>
@@ -2673,7 +3202,7 @@ const fetchAttendanceData = async () => {
 
             <div class="net-pay">
               <span>เงินได้สุทธิ (Net Pay)</span>
-              <span class="amount-value">฿ ${netSalary.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+              <span class="amount-value">฿ ${formatNum(netSalary)}</span>
             </div>
 
             <div class="signature-section">
@@ -2933,16 +3462,36 @@ const fetchDashboardData = async (isBackground = false) => {
       setUserMenus(user.role === 'admin' || user.role === 'ceo' ? masterMenuList.map(m=>m.id) : defaultMenus);
     }
 
-    // 📑 3. ดึงข้อมูลส่วนตัว (ใบลา/ปรับปรุง/สลิป)
+    // 📑 3. ดึงข้อมูลส่วนตัว (ใบลา/ปรับปรุง/สลิป) - ฉบับอัปเกรดระบบล็อคสลิป
     const { data: leaves } = await supabase.from('leave_requests').select('*').eq('employee_id', user.id).order('created_at', { ascending: false });
     setAllLeaves(leaves || []);
     setPendingLeaves(leaves?.filter(l => l.status === 'รออนุมัติ').slice(0, 4) || []);
+    
     const { data: adjusts } = await supabase.from('adjustment_requests').select('*').eq('employee_id', user.id).order('created_at', { ascending: false });
     setAllAdjustments(adjusts || []);
+    
     const { data: balances } = await supabase.from('leave_balances').select('*').eq('employee_id', user.id);
     setLeaveBalances(balances?.sort((a, b) => b.total_days - a.total_days) || []);
-    const { data: mySlipsData } = await supabase.from('payroll_slips').select('*, employees(full_name, employee_code, position)').eq('employee_id', user.id).order('month', { ascending: false });
-    setMySlips(mySlipsData || []);
+    
+    // ดึงข้อมูลสลิปเงินเดือน
+    const { data: mySlipsData } = await supabase.from('payroll_slips')
+      .select('*, employees(full_name, employee_code, position)')
+      .eq('employee_id', user.id)
+      .order('month', { ascending: false });
+
+    // 🛡️ [Security Filter]: ป้องกันพนักงานเห็นสลิปก่อนจ่ายเงินจริง
+    let visibleSlips = mySlipsData || [];
+    
+    // ถ้าคนล๊อกอินไม่ใช่ Admin หรือ CEO ให้กรองข้อมูล
+    if (user?.role !== 'admin' && user?.role !== 'ceo') {
+      visibleSlips = visibleSlips.filter(slip => 
+        // พนักงานจะเห็นเฉพาะสลิปที่แอดมินกดส่งเมลแล้ว (true) 
+        // หรือสลิปเก่าๆ ในระบบที่ยังไม่มีค่านี้ (null) เพื่อไม่ให้ประวัติเก่าหาย
+        slip.is_published === true || slip.is_published === null
+      );
+    }
+    
+    setMySlips(visibleSlips);
     
 // 💎 4. ยอดขายส่วนตัว (ตัดรอบ 26-25) ยอดรีเซ็ตอัตโนมัติ 0 บาทเมื่อเริ่มรอบบิลใหม่
     const { data: mySales } = await supabase.from('employee_sales').select('*').eq('employee_id', user.id).eq('month', currentMonth).maybeSingle();
@@ -3084,25 +3633,19 @@ const fetchDashboardData = async (isBackground = false) => {
       console.log("✅ อัปเดตยอดขายองค์กรบนหน้าจอ (รอบ 26-25) เป็น:", finalAmount);
     }
 
-    // 👑 6. ข้อมูล Admin / CEO (V.3.0 ทีมไลฟ์สด + บอส PL001 เท่านั้น)
+// 👑 6. ข้อมูล Admin / CEO (V.3.0 ทีมไลฟ์สด + บอส PL001 เท่านั้น)
     if (user.role === 'admin' || user.role === 'ceo') {
       
       // 🚩 เพิ่มตรงนี้: ดึงสลิปทั้งหมดจาก DB มาใส่ตัวแปร adminPayrollSlips ให้แอดมินเห็น
       const { data: slipsData } = await supabase.from('payroll_slips').select('*, employees(full_name, employee_code, position)').order('created_at', { ascending: false });
       if (slipsData) setAdminPayrollSlips(slipsData);
 
+      // 🚀 [แก้บัครายชื่อหายระดับชาติ]: สั่งให้ระบบดึงรายชื่อ "พนักงานทุกคน" กลับมา!
+      // (ผมลบคำสั่ง setEmployees(liveStreamers) ทิ้งไปแล้ว เพราะมันคือตัวที่ทำให้ชื่อคนอื่นหายครับ)
+      await fetchEmployeesData();
+
       // ใช้ globalEmpList ที่ดึงมาแล้วจากข้อ 5 ได้เลย ไม่ต้องดึงซ้ำให้เปลืองรอบ
       const empList = globalEmpList || [];
-        
-      const liveStreamers = empList.filter(emp => {
-        const pos = emp.position?.toLowerCase() || '';
-        return (
-          pos.includes('ไลฟ์') || pos.includes('live') || pos.includes('streamer') || 
-          emp.employee_code === 'PL001'
-        );
-      });
-
-      setEmployees(liveStreamers); 
 
       const { data: pendingL } = await supabase.from('leave_requests').select('*, employees(full_name)').eq('status', 'รออนุมัติ');
       setAdminLeaves(pendingL || []);
@@ -3860,7 +4403,7 @@ const importLiveHistory = async (event) => {
     }
   };
 
-  // 🗑️ ฟังก์ชันลบสลิปเงินเดือน (เฉพาะ CEO, Admin และ Accounting)
+// 🗑️ ฟังก์ชันลบสลิปเงินเดือน (ฉบับอัปเกรด: เคลียร์ State นุ่มนวล ป้องกัน Extension เบราว์เซอร์ค้าง)
   const handleDeleteSlip = async (id) => {
     const allowedRoles = ['admin', 'ceo', 'Accounting & Finance Officer'];
     if (!allowedRoles.includes(user?.role)) {
@@ -3875,15 +4418,38 @@ const importLiveHistory = async (event) => {
       confirmButtonColor: '#e11d48',
       cancelButtonColor: '#94a3b8',
       confirmButtonText: 'ใช่, ลบทิ้งเลย',
-      cancelButtonText: 'ยกเลิก'
+      cancelButtonText: 'ยกเลิก',
+      customClass: { popup: 'rounded-[2rem]' }
     });
 
     if (result.isConfirmed) {
+      // 1. เปิดหน้าโหลดดิ้งล็อคหน้าจอไว้ก่อน
+      Swal.fire({ title: 'กำลังลบข้อมูล...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      
       try {
+        // 2. ยิงคำสั่งลบในฐานข้อมูล Supabase
         const { error } = await supabase.from('payroll_slips').delete().eq('id', id);
         if (error) throw error;
-        Swal.fire('ลบสำเร็จ!', 'สลิปถูกลบออกจากระบบเรียบร้อย', 'success');
-        fetchDashboardData();
+        
+        // 3. 🟢 ลบข้อมูลออกจาก State ของหน้าจอทันที (หลอกเบราว์เซอร์ให้ UI เปลี่ยนก่อน Popup หาย)
+        setAdminPayrollSlips(prev => prev.filter(slip => slip.id !== id));
+        if (typeof setPayrollData === 'function') {
+           setPayrollData(prev => prev.filter(slip => slip.id !== id));
+        }
+
+        // 4. สั่งเปลี่ยนหน้าต่าง Popup เป็นสำเร็จทันทีแบบไม่ต้องรอโหลด
+        Swal.fire({ 
+          icon: 'success', 
+          title: 'ลบสำเร็จ!', 
+          text: 'สลิปถูกลบออกจากระบบเรียบร้อย', 
+          showConfirmButton: false, 
+          timer: 1500, 
+          customClass: { popup: 'rounded-[2rem]' } 
+        });
+
+        // 5. ค่อยสั่งดึงข้อมูล Dashboard ใหม่แบบเงียบๆ เบื้องหลัง
+        fetchDashboardData(true);
+
       } catch (err) {
         Swal.fire('Error', err.message, 'error');
       }
@@ -3901,75 +4467,98 @@ const handlePreviewAttendance = async () => {
       const { data: empInfo } = await supabase.from('employees').select('*').eq('id', payrollForm.employee_id).single();
       if (!empInfo) throw new Error("ไม่พบข้อมูลพนักงาน");
 
-      const isPT = empInfo.salary_type === 'Part-time';
-      const baseSalary = Number(payrollForm.base_salary) || Number(empInfo.base_salary) || 0;
-      const hRate = Number(empInfo.hourly_rate) || 0;
+      // 🚀 ดึงวันที่เริ่มต้นและสิ้นสุดมาจาก Form (รองรับเคสคุณกาญจนา PL004 และคนทั่วไป)
+      let sDateStr = payrollForm.start_date;
+      let eDateStr = payrollForm.end_date;
 
-      const [year, month] = payrollForm.month.split('-');
-      const startDate = `${year}-${month}-01`;
-      const endDateObj = new Date(year, parseInt(month), 1);
-      const endDate = `${endDateObj.getFullYear()}-${String(endDateObj.getMonth() + 1).padStart(2, '0')}-01`;
+      // ถ้าไม่มีในฟอร์ม ให้ใช้สูตร 26-25 เดิมเป็นตัวสำรอง
+      if (!sDateStr || !eDateStr) {
+        const [year, month] = payrollForm.month.split('-');
+        let sY = parseInt(year), sM = parseInt(month) - 1;
+        if (sM < 1) { sM = 12; sY -= 1; }
+        sDateStr = `${sY}-${String(sM).padStart(2, '0')}-26`;
+        eDateStr = `${year}-${String(month).padStart(2, '0')}-25`;
+      }
 
-      const { data: attLogs } = await supabase.from('attendance_logs').select('*').eq('employee_id', payrollForm.employee_id).gte('timestamp', `${startDate}T00:00:00Z`).lt('timestamp', `${endDate}T00:00:00Z`);
-
-      let totalLateMins = 0; let totalWorkMins = 0;
-      const dailyLogs = {};
+      const startDateISO = `${sDateStr}T00:00:00+07:00`;
       
-      if (attLogs) {
-        attLogs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp)).forEach(log => {
-          const d = log.timestamp.split('T')[0];
-          if (!dailyLogs[d]) dailyLogs[d] = [];
-          dailyLogs[d].push(log);
-        });
+      // 🚀 คำนวณวันถัดไปสำหรับการ Query ข้อมูลสแกนนิ้ว (เพื่อครอบคลุมเวลาถึง 23:59 น.)
+      const eDateObj = new Date(eDateStr);
+      eDateObj.setDate(eDateObj.getDate() + 1);
+      const endDateISO = `${eDateObj.getFullYear()}-${String(eDateObj.getMonth() + 1).padStart(2, '0')}-${String(eDateObj.getDate()).padStart(2, '0')}T00:00:00+07:00`;
+      
+      const bDateObj = new Date(eDateObj);
+      bDateObj.setDate(bDateObj.getDate() + 1); // บัฟเฟอร์เผื่อกะดึกอีก 1 วัน
+      const bufferEndDate = `${bDateObj.getFullYear()}-${String(bDateObj.getMonth() + 1).padStart(2, '0')}-${String(bDateObj.getDate()).padStart(2, '0')}T00:00:00+07:00`;
 
-        Object.keys(dailyLogs).forEach(date => {
-          const logs = dailyLogs[date];
-          const dateObj = new Date(date);
-          const dayOfWeek = dateObj.getDay();
-          
-          const shiftData = (shiftRoster || {})[payrollForm.employee_id]?.[dayOfWeek];
-          let expectedInMins = 540; 
-          let isDayOff = false;
+      const { data: attLogs } = await supabase.from('attendance_logs')
+        .select('*')
+        .eq('employee_id', payrollForm.employee_id)
+        .gte('timestamp', startDateISO)
+        .lt('timestamp', bufferEndDate);
 
-          if (shiftData) {
-            if (shiftData.off) isDayOff = true;
-            else {
-              const firstShift = Array.isArray(shiftData) ? shiftData[0] : shiftData;
-              if (firstShift?.in) {
-                const [h, m] = firstShift.in.split(':').map(Number);
-                expectedInMins = (h * 60) + m;
-              }
+      let totalWorkMins = 0;
+      if (attLogs && attLogs.length > 0) {
+        const sortedLogs = attLogs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        let currentIn = null;
+
+        sortedLogs.forEach(log => {
+          if (log.log_type === 'check_in') {
+            if (!currentIn && log.timestamp < endDateISO) {
+              currentIn = new Date(log.timestamp);
             }
-          }
+          } else if (log.log_type === 'check_out' && currentIn) {
+            // 🧠 เคล็ดลับ 154:48 - ตัด "วินาที" ทิ้งให้เป็น 00 ก่อนคำนวณ ให้เหมือน Excel
+            const inTime = new Date(currentIn);
+            inTime.setSeconds(0, 0); 
+            
+            const outTime = new Date(log.timestamp);
+            outTime.setSeconds(0, 0);
 
-          const checkIns = logs.filter(l => l.log_type === 'check_in');
-          const checkOuts = logs.filter(l => l.log_type === 'check_out');
-
-          if (checkIns.length > 0 && !isDayOff) {
-            const firstIn = new Date(checkIns[0].timestamp);
-            const actualInMins = (firstIn.getHours() * 60) + firstIn.getMinutes();
-            if (actualInMins > expectedInMins) totalLateMins += (actualInMins - expectedInMins);
-
-            if (checkOuts.length > 0) {
-              const lastOut = new Date(checkOuts[checkOuts.length - 1].timestamp);
-              let dailyMins = Math.floor((lastOut - firstIn) / (1000 * 60));
-              if (dailyMins > 300) dailyMins -= 60; // หักพักเที่ยง
-              if (dailyMins > 0) totalWorkMins += dailyMins;
-            }
+            const diffMins = Math.floor((outTime - inTime) / 60000);
+            if (diffMins > 0) totalWorkMins += diffMins;
+            
+            currentIn = null;
           }
         });
       }
 
-      const lateDeduct = isPT ? 0 : Math.round(totalLateMins * (baseSalary / 30 / 8 / 60));
-      const salaryPreview = isPT ? Math.round((totalWorkMins * hRate) / 60) : baseSalary;
+      const workHrs = Math.floor(totalWorkMins / 60);
+      const workMins = totalWorkMins % 60;
 
-      // 🟢 นำค่าที่คำนวณได้ ไปใส่ในตัวแปรสำหรับแก้ไข
+      const { data: campData } = await supabase.from('system_settings').select('setting_value').eq('setting_key', 'holiday_campaigns').maybeSingle();
+      const camps = campData?.setting_value ? JSON.parse(campData.setting_value) : [];
+      const { data: empSalesData } = await supabase.from('employee_sales').select('*').eq('employee_id', payrollForm.employee_id).eq('month', payrollForm.month).maybeSingle();
+      
+      let commissionPreview = 0;
+      if (empSalesData) {
+        // 🚀 ปรับให้ดึงยอด Live Tracking ตามวันตัดรอบบิลของแต่ละคนเป๊ะๆ
+        const { data: myLiveThisCycle } = await supabase.from('live_tracking')
+          .select('live_date, net_sales')
+          .eq('employee_id', payrollForm.employee_id)
+          .gte('live_date', sDateStr)
+          .lte('live_date', eDateStr);
+          
+        let totalCycleSales = 0, holidayComm = 0, specialSales = 0;
+        if (myLiveThisCycle) {
+          myLiveThisCycle.forEach(log => {
+            const net = Number(log.net_sales || 0); totalCycleSales += net;
+            const camp = camps.find(c => log.live_date >= c.startDate && log.live_date <= c.endDate);
+            if (camp) { holidayComm += net * (Number(camp.rate) / 100); specialSales += net; }
+          });
+        }
+        commissionPreview = parseFloat((((totalCycleSales - specialSales) * (Number(empSalesData.commission_rate || 0) / 100)) + holidayComm).toFixed(2));
+      }
+
+      const isPT = empInfo.salary_type === 'Part-time';
+      const salaryPreview = isPT ? Math.round((totalWorkMins * (empInfo.hourly_rate || 0)) / 60) : (empInfo.base_salary || 0);
+
       setPayrollForm(prev => ({
         ...prev,
-        manual_work_hours: (totalWorkMins / 60).toFixed(2), // ชั่วโมงทำงานแบบทศนิยม เช่น 8.5 ชม.
-        manual_late_mins: totalLateMins,
-        manual_late_deduct: lateDeduct,
+        manual_work_hours: workHrs,
+        manual_work_mins: workMins,
         manual_base_salary: salaryPreview,
+        commission: commissionPreview,
         is_previewed: true
       }));
       Swal.close();
@@ -3978,242 +4567,141 @@ const handlePreviewAttendance = async () => {
 
 
 
-// 💸 ฟังก์ชันสร้างสลิปเงินเดือน (รองรับ 4 รูปแบบ: ปกติ-ประจำ, ปกติ-พาร์ทไทม์, ไลฟ์สด-ประจำ, ไลฟ์สด-พาร์ทไทม์)
+// 💸 ฟังก์ชันสร้างสลิปเงินเดือน (ฉบับอัปเกรด: บันทึกลงระบบอย่างเดียว + รองรับรอบตัดวีคพิเศษ)
   const handleGenerateSlip = async (e) => {
     e.preventDefault();
     setIsSavingPayroll(true);
     try {
       if (!payrollForm.employee_id) throw new Error("กรุณาเลือกพนักงาน");
-
+      
+      // ดึงข้อมูลพนักงานเพื่อเอา Email และข้อมูลพื้นฐาน
       const { data: empInfo } = await supabase.from('employees').select('*').eq('id', payrollForm.employee_id).single();
       if (!empInfo) throw new Error("ไม่พบข้อมูลพนักงาน");
 
-      // ✨ แยกประเภทพนักงาน 2 แกน (รายเดือน/รายชั่วโมง) และ (ไลฟ์สด/ออฟฟิศ)
-      const isPartTime = empInfo.salary_type === 'Part-time';
-      const positionName = (empInfo.position || '').toLowerCase();
-      const isLiveStreamer = positionName.includes('ไลฟ์') || positionName.includes('live') || positionName.includes('สตรีม');
+      // 🚀 ส่วนของการคำนวณเวลา (ดึงจากช่องวันที่ที่เราเพิ่มเข้าไป รองรับเคสคุณกาญจนา PL004)
+      let sDateStr = payrollForm.start_date;
+      let eDateStr = payrollForm.end_date;
 
-      const baseSalary = Number(payrollForm.base_salary) || Number(empInfo.base_salary) || 0;
-      const hRate = Number(empInfo.hourly_rate) || 0;
+      // ถ้าไม่มีในฟอร์ม (กันเหนียว) ให้ใช้สูตร 26-25 เดิมเป็นตัวสำรอง
+      if (!sDateStr || !eDateStr) {
+        const [year, month] = payrollForm.month.split('-');
+        let sY = parseInt(year, 10), sM = parseInt(month, 10) - 1;
+        if (sM < 1) { sM = 12; sY -= 1; }
+        sDateStr = `${sY}-${String(sM).padStart(2, '0')}-26`;
+        eDateStr = `${year}-${String(month).padStart(2, '0')}-25`;
+      }
 
-      const [year, month] = payrollForm.month.split('-');
-      const startDate = `${year}-${month}-01`;
-      const endDateObj = new Date(year, parseInt(month), 1); 
-      const endDate = `${endDateObj.getFullYear()}-${String(endDateObj.getMonth() + 1).padStart(2, '0')}-01`;
+      const startDateISO = `${sDateStr}T00:00:00+07:00`;
+      
+      // คำนวณวันถัดไป เพื่อให้ครอบคลุมเวลาถึง 23:59 ของวันตัดรอบบิล
+      const eDateObj = new Date(eDateStr);
+      eDateObj.setDate(eDateObj.getDate() + 1);
+      const endDateISO = `${eDateObj.getFullYear()}-${String(eDateObj.getMonth() + 1).padStart(2, '0')}-${String(eDateObj.getDate()).padStart(2, '0')}T00:00:00+07:00`;
+      
+      const bDateObj = new Date(eDateObj);
+      bDateObj.setDate(bDateObj.getDate() + 1); // บัฟเฟอร์เผื่อกะดึกอีก 1 วัน
+      const bufferEndDate = `${bDateObj.getFullYear()}-${String(bDateObj.getMonth() + 1).padStart(2, '0')}-${String(bDateObj.getDate()).padStart(2, '0')}T00:00:00+07:00`;
 
-      const { data: attLogs } = await supabase.from('attendance_logs').select('timestamp, log_type').eq('employee_id', payrollForm.employee_id).gte('timestamp', `${startDate}T00:00:00Z`).lt('timestamp', `${endDate}T00:00:00Z`);
+      const { data: attLogs } = await supabase.from('attendance_logs').select('timestamp, log_type').eq('employee_id', payrollForm.employee_id).gte('timestamp', startDateISO).lt('timestamp', bufferEndDate);
 
       let totalWorkMins = 0;
-      let totalOTMins = 0;
-      let totalLateMins = 0;
-      let workedDates = new Set();
-
-      const dailyLogs = {};
-
-      if (attLogs && attLogs.length > 0) {
-        const sortedLogs = attLogs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-        
-        sortedLogs.forEach(log => {
-          const date = log.timestamp.split('T')[0];
-          if (!dailyLogs[date]) dailyLogs[date] = [];
-          dailyLogs[date].push(log);
-        });
-
-        const shiftStart = empInfo.shift_start || "09:00:00"; 
-        const [shiftHour, shiftMin] = shiftStart.split(':').map(Number);
-        const expectedStartMins = (shiftHour * 60) + shiftMin;
-
-        Object.keys(dailyLogs).forEach(date => {
-          const logsOfDay = dailyLogs[date];
-          let dailyWorkMins = 0;
-          let firstCheckIn = null;
-
-          // 🧠 สมองส่วนที่ 1: วิธีการนับเวลาทำงาน (แยกระหว่างไลฟ์สด กับ ปกติ)
-          if (isLiveStreamer) {
-            let currentIn = null;
-            let checkInCount = 0;
-
-            logsOfDay.forEach(log => {
-              if (log.log_type === 'check_in') {
-                currentIn = new Date(log.timestamp);
-                checkInCount++;
-                if (!firstCheckIn) firstCheckIn = currentIn; 
-              } else if (log.log_type === 'check_out' && currentIn) {
-                dailyWorkMins += Math.floor((new Date(log.timestamp) - currentIn) / (1000 * 60));
-                currentIn = null;
-              }
-            });
-
-            if (checkInCount === 1 && dailyWorkMins > 300) {
-              dailyWorkMins -= 60; 
-            }
-          } else {
-            const checkIns = logsOfDay.filter(l => l.log_type === 'check_in');
-            const checkOuts = logsOfDay.filter(l => l.log_type === 'check_out');
-
-            if (checkIns.length > 0 && checkOuts.length > 0) {
-              firstCheckIn = new Date(checkIns[0].timestamp);
-              const lastCheckOut = new Date(checkOuts[checkOuts.length - 1].timestamp);
-
-              dailyWorkMins = Math.floor((lastCheckOut - firstCheckIn) / (1000 * 60));
-              if (dailyWorkMins > 300) {
-                dailyWorkMins -= 60;
-              }
-            }
-          }
-
-          // 🧠 สมองส่วนที่ 2: วิธีแปลงเวลาไปเป็นเงิน
-          if (dailyWorkMins > 0) {
-            workedDates.add(date); 
-            
-            if (isPartTime) {
-              totalWorkMins += dailyWorkMins; 
-            } else {
-              const standardMins = 480; // 8 ชม.
-              const workMins = Math.min(dailyWorkMins, standardMins);
-              const otMins = Math.max(0, dailyWorkMins - standardMins);
-              totalWorkMins += workMins;
-              totalOTMins += otMins;
-
-              if (firstCheckIn) {
-                const checkInHour = firstCheckIn.getHours();
-                const checkInMin = firstCheckIn.getMinutes();
-                const totalCheckInMins = (checkInHour * 60) + checkInMin;
-                
-                if (totalCheckInMins > expectedStartMins) {
-                  totalLateMins += (totalCheckInMins - expectedStartMins);
-                }
-              }
-            }
+      if (attLogs) {
+        const sorted = attLogs.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        let currentIn = null;
+        sorted.forEach(log => {
+          if (log.log_type === 'check_in') {
+            if (!currentIn && log.timestamp < endDateISO) currentIn = new Date(log.timestamp);
+          } else if (log.log_type === 'check_out' && currentIn) {
+            // ตัดวินาทีทิ้ง ให้เหมือนใน Excel (154:48)
+            const inTime = new Date(currentIn); inTime.setSeconds(0, 0);
+            const outTime = new Date(log.timestamp); outTime.setSeconds(0, 0);
+            totalWorkMins += Math.floor((outTime - inTime) / 60000);
+            currentIn = null;
           }
         });
       }
 
-      const autoWorkHours = (totalWorkMins / 60).toFixed(2);
-      const autoOTHours = (totalOTMins / 60).toFixed(2);
+      const manualTotalMins = (Number(payrollForm.manual_work_hours || 0) * 60) + Number(payrollForm.manual_work_mins || 0);
+      const finalWorkHours = (manualTotalMins / 60).toFixed(2);
+      
+      // 💰 คำนวณรายได้ (ถอด Math.round ออกเพื่อรักษาเศษสตางค์)
+      const salaryAmount = empInfo.salary_type === 'Part-time' 
+        ? ((manualTotalMins * (empInfo.hourly_rate || 0)) / 60) 
+        : Number(payrollForm.manual_base_salary || empInfo.base_salary || 0);
+      
+      // 🧾 ดึงยอดหักต่างๆ จากฟอร์ม
+      const ssoVal = Number(payrollForm.social_security || 0);
+      const taxVal = Number(payrollForm.tax || 0);
+      const lateVal = Number(payrollForm.manual_late_deduct || 0);
+      const otherDeductVal = Number(payrollForm.deductions || 0);
+      const leaveVal = Number(payrollForm.leave_deduct || 0);
+      const absVal = Number(payrollForm.absence_deduction || 0);
 
-      // 🟢 1. ดึงค่าที่เราแก้ (Manual) มาใช้ ถ้าแอดมินแก้ตัวเลขให้ยึดตัวเลขนั้นเป็นหลัก
-      const finalWorkHours = payrollForm.manual_work_hours !== undefined ? payrollForm.manual_work_hours : autoWorkHours;
-      const finalLateMins = payrollForm.manual_late_mins !== undefined ? Number(payrollForm.manual_late_mins) : totalLateMins;
-      const finalOTHours = payrollForm.ot_hours !== undefined ? payrollForm.ot_hours : autoOTHours;
+      // 🚀 คำนวณยอดสุทธิ (Net Salary) แบบรักษาทศนิยมไว้เป๊ะๆ
+      const netSalary = (
+        Number(salaryAmount) + 
+        Number(payrollForm.ot_amount || 0) + 
+        Number(payrollForm.bonus || 0) + 
+        Number(payrollForm.commission || 0) - 
+        lateVal - ssoVal - taxVal - otherDeductVal - leaveVal - absVal
+      );
 
-      let salaryAmount = 0;
-      let otPay = Number(payrollForm.ot_amount) || 0;
-
-      // 🟢 2. ให้ความสำคัญกับค่าแรงที่แอดมินแก้ (แก้ Part-time ขาด/เกิน ก็จบตรงนี้เลย)
-      if (isPartTime) {
-        salaryAmount = payrollForm.manual_base_salary !== undefined 
-          ? Number(payrollForm.manual_base_salary) 
-          : Math.round((totalWorkMins * hRate) / 60); 
-      } else {
-        salaryAmount = payrollForm.manual_base_salary !== undefined 
-          ? Number(payrollForm.manual_base_salary) 
-          : baseSalary;
-      }
-
-      const { data: empSalesData } = await supabase.from('employee_sales')
-        .select('current_sales, commission_rate')
-        .eq('employee_id', payrollForm.employee_id)
-        .eq('month', payrollForm.month)
-        .maybeSingle();
-
-      const commission = empSalesData ? (Number(empSalesData.current_sales) * (Number(empSalesData.commission_rate || 0) / 100)) : 0;
-
-      let leaveDeduct = 0;
-      let autoLateDeduction = 0;
-
-      if (!isPartTime) {
-        const { data: allLeavesInMonth } = await supabase.from('leave_requests')
-          .select('leave_type, start_date, end_date, duration_minutes')
-          .eq('employee_id', payrollForm.employee_id)
-          .eq('status', 'อนุมัติ')
-          .lt('start_date', endDate)
-          .gte('end_date', startDate);
-          
-        if (allLeavesInMonth && allLeavesInMonth.length > 0) {
-          let unpaidMinsInMonth = 0;
-          const leaveDates = new Set();
-          
-          allLeavesInMonth.forEach(l => {
-            const s = new Date(l.start_date);
-            const e = new Date(l.end_date || l.start_date);
-            
-            for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
-               const dateStr = d.toISOString().split('T')[0];
-               if (dateStr >= startDate && dateStr < endDate && !workedDates.has(dateStr)) {
-                  leaveDates.add(dateStr);
-                  if (l.leave_type === 'ลาไม่รับเงินเดือน') {
-                      unpaidMinsInMonth += 480; 
-                  }
-               }
-            }
-          });
-          
-          leaveDeduct = Math.round(unpaidMinsInMonth * (baseSalary / (30 * 8 * 60)));
-        }
-
-        // ใช้จำนวนนาทีสายที่แอดมินแก้ มาคำนวณหักเงิน
-        if (finalLateMins > 0) {
-          const ratePerMin = baseSalary / 30 / 8 / 60; 
-          autoLateDeduction = Math.round(finalLateMins * ratePerMin);
-        }
-      }
-
-      // 🟢 3. หักสายบาท (ยึดตามที่แอดมินแก้ หรือใช้ออโต้)
-      const finalLateDeduct = payrollForm.manual_late_deduct !== undefined ? Number(payrollForm.manual_late_deduct) : autoLateDeduction;
-
-      const autoAbsentDeduction = 0;
-      const bonus = Number(payrollForm.bonus) || 0;
-      const manualDeduct = Number(payrollForm.deductions) || 0; 
-      const ssoDeduct = Number(payrollForm.social_security) || 0;
-      const taxDeduct = Number(payrollForm.tax) || 0;
-
-      // 🟢 4. คิดยอดสุทธิ (Net Salary) ใหม่ด้วยค่าที่แก้ทั้งหมด
-      const netSalary = Math.round((salaryAmount + commission + otPay + bonus) - (leaveDeduct + manualDeduct + finalLateDeduct + autoAbsentDeduction + ssoDeduct + taxDeduct));
-
+      // เตรียมข้อมูล Payload ให้ตรงกับคอลัมน์ใน Supabase
       const payload = {
         employee_id: payrollForm.employee_id, 
-        month: payrollForm.month,
+        month: payrollForm.month, 
         salary_type: empInfo.salary_type,
-        // 🟢 5. บันทึกยอดเงินเข้า DB ไปเลย จะได้เอาไปโชว์ในสลิปได้ถูกต้อง (ไม่เซ็ต 0 แล้ว)
-        base_salary: salaryAmount,
+        base_salary: salaryAmount, 
         total_work_hours: finalWorkHours,
-        ot_hours: finalOTHours, 
-        ot_amount: otPay,
-        commission: commission, 
-        bonus: bonus,
-        leave_deduction: leaveDeduct, 
-        late_deduction: finalLateDeduct,
-        absence_deduction: autoAbsentDeduction,
-        deductions: manualDeduct,
-        social_security_deduction: ssoDeduct, 
-        tax_deduction: taxDeduct,             
+        commission: Number(payrollForm.commission || 0), 
+        bonus: Number(payrollForm.bonus || 0),
+        ot_amount: Number(payrollForm.ot_amount || 0), 
+        
+        // บันทึกยอดหักแยกคอลัมน์เพื่อให้สลิปดึงไปแสดงผลได้
+        social_security: ssoVal,
+        tax: taxVal,
+        manual_late_deduct: lateVal,
+        leave_deduction: leaveVal,
+        absence_deduction: absVal,
+        deductions: otherDeductVal,
+        
         net_salary: netSalary
       };
 
+      // 1. บันทึกหรืออัปเดตลง Database
       const { data: exist } = await supabase.from('payroll_slips').select('id').eq('employee_id', payrollForm.employee_id).eq('month', payrollForm.month).maybeSingle();
-      if (exist) await supabase.from('payroll_slips').update(payload).eq('id', exist.id); 
-      else await supabase.from('payroll_slips').insert([payload]); 
-
-      let alertText = `บันทึกข้อมูลเงินเดือนเรียบร้อย`;
-      if (finalLateDeduct > 0) {
-        alertText = `พบการหักเงิน:\n- สาย ${finalLateMins} นาที (หัก ฿${finalLateDeduct.toLocaleString()})\n\nบันทึกข้อมูลสำเร็จ`;
+      
+      let saveError;
+      if (exist) {
+        const { error } = await supabase.from('payroll_slips').update(payload).eq('id', exist.id); 
+        saveError = error;
+      } else {
+        const { error } = await supabase.from('payroll_slips').insert([payload]); 
+        saveError = error;
       }
 
+      if (saveError) throw saveError;
+
+      // 2. ปิดหน้าต่างและโหลดข้อมูลตารางใหม่
       await fetchDashboardData(true); 
-      setPayrollFilterMonth(payrollForm.month); 
-      setPayrollSearchKeyword(''); 
       setIsPayrollModalOpen(false); 
       
-      Swal.fire({ icon: 'success', title: 'ประมวลผลสำเร็จ!', text: alertText, confirmButtonColor: '#10B981' });
-      
-    } catch (error) {
-      Swal.fire('Error', error.message, 'error');
-    } finally {
-      setIsSavingPayroll(false);
+      Swal.fire({
+        icon: 'success',
+        title: 'บันทึกสลิปเรียบร้อย!',
+        text: 'บันทึกข้อมูลเข้าระบบแล้ว (คุณสามารถส่งอีเมลให้พนักงานได้ในภายหลัง)',
+        showConfirmButton: false,
+        timer: 2500,
+        customClass: { popup: 'rounded-[2rem]' }
+      });
+
+    } catch (error) { 
+      Swal.fire('Error', error.message, 'error'); 
+    } finally { 
+      setIsSavingPayroll(false); 
     }
   };
-
+  
 // =========================================================================
   // 🔍 ฟังก์ชันตรวจสอบและแก้ไข (เวอร์ชัน AI 6 คีย์ ไม่ทับหน้าต่างเดิม + รูปไม่หาย)
   // =========================================================================
@@ -4741,7 +5229,7 @@ const notifyApprovalResult = async (employeeId, requestType, status, detail) => 
     } catch (err) { console.error("Notify Error:", err.message); }
 };
 
-// ✅ 2. ฟังก์ชันอนุมัติ (อัปเดตเวลาลง DB แบบ Timezone +07:00 แก้ปัญหา 00 เบิ้ล + ไม่โหลดหน้าจอ)
+// ✅ 2. ฟังก์ชันอนุมัติ (อัปเดตเวลาลง DB แบบ Timezone +07:00 แก้ปัญหา 00 เบิ้ล + จัดการสลับวันหยุดอัตโนมัติ)
 const executeApproveWithPopup = async (record, type, isLeave) => {
     const result = await Swal.fire({
       title: 'ยืนยันการอนุมัติ?', html: `คุณต้องการอนุมัติคำขอ <b>${type}</b> ใช่หรือไม่?`, icon: 'question',
@@ -4806,6 +5294,40 @@ const executeApproveWithPopup = async (record, type, isLeave) => {
                   status: 'normal'
                 }]);
               if (insertError) throw insertError;
+            }
+          }
+          // 🚀🚀🚀 ลอจิกใหม่: ถ้าเป็น "สลับวันหยุด" ให้เข้าไปอัปเดตตารางวันหยุดด้วย! 🚀🚀🚀
+          else if (record.request_type === 'สลับวันหยุด' || record.request_type === 'Swap Day') {
+            // ค้นหาวันหยุดเดิมจากตาราง leave_requests
+            const { data: existingOff } = await supabase
+              .from('leave_requests')
+              .select('id')
+              .eq('employee_id', record.employee_id)
+              .eq('start_date', record.old_date)
+              .limit(1);
+
+            if (existingOff && existingOff.length > 0) {
+              // ถ้าเจอวันหยุดเดิม ให้แก้ไขวันที่เดิมเป็นวันหยุดใหม่ไปเลย
+              const { error: updateOffErr } = await supabase.from('leave_requests')
+                .update({ 
+                  start_date: record.new_date, 
+                  end_date: record.new_date,
+                  reason: `[สลับมาจาก ${record.old_date}] ${record.reason || ''}`
+                })
+                .eq('id', existingOff[0].id);
+              if (updateOffErr) throw updateOffErr;
+            } else {
+              // ถ้าไม่เจอของเดิม ให้สร้างคำขอวันหยุดใหม่ลงในตารางให้เลย
+              const { error: insertOffErr } = await supabase.from('leave_requests').insert([{
+                employee_id: record.employee_id,
+                leave_type: 'วันหยุดประจำสัปดาห์ (PT)',
+                start_date: record.new_date,
+                end_date: record.new_date,
+                duration_minutes: 0,
+                status: 'อนุมัติ',
+                reason: `[สลับมาจาก ${record.old_date}] ${record.reason || ''}`
+              }]);
+              if (insertOffErr) throw insertOffErr;
             }
           }
         }
@@ -5283,26 +5805,45 @@ const executeRejectWithPopup = async (record, type, isLeave) => {
 
               {/* 📌 หมวดที่ 3: ผลงาน & รายได้ */}
               <div className="text-[10px] font-black text-white/50 uppercase tracking-wider mt-6 mb-2 px-2 border-t border-white/10 pt-4">💰 ผลงาน & รายได้</div>
+              
               {userMenus.includes('menu_sales') && (
                 <button onClick={() => { setCurrentView("sales"); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-5 py-3.5 rounded-xl font-bold text-sm transition-all border ${currentView === 'sales' ? 'bg-gradient-to-r from-rose-500 to-pink-500 border-rose-400 text-white shadow-md' : 'border-transparent text-white/70 hover:bg-white/20 hover:text-white'}`}>💎 {t.menuSales}</button>
               )}
+              
+              {/* 🚀 ปุ่มที่ 1: วิเคราะห์ค่าโฆษณา (ROAS Tracker) */}
+              {(user?.role === 'admin' || user?.role === 'ceo') && (
+                <button onClick={() => { setCurrentView("ads_performance"); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-5 py-3.5 rounded-xl font-bold text-sm transition-all border mt-2 ${currentView === 'ads_performance' ? 'bg-gradient-to-r from-orange-500 to-rose-500 border-orange-400 text-white shadow-md' : 'border-transparent text-white/70 hover:bg-white/20 hover:text-white'}`}>
+                  🔥 วิเคราะห์ค่า Ads (ROAS)
+                </button>
+              )}
+
               {userMenus.includes('menu_sales_history') && (
                 <button onClick={() => { setCurrentView("menu_sales_history"); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-5 py-3.5 rounded-xl font-bold text-sm transition-all border mt-2 ${currentView === 'menu_sales_history' ? 'bg-gradient-to-r from-indigo-500 to-purple-500 border-indigo-400 text-white shadow-md' : 'border-transparent text-white/70 hover:bg-white/20 hover:text-white'}`}>📊 สถิติยอดขายย้อนหลัง</button>
               )}
-              {(user?.role === 'admin' || user?.role === 'ceo') && (
-                <button onClick={() => { setCurrentView("kpi_manager"); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-5 py-3.5 rounded-xl font-bold text-sm transition-all border mt-2 ${currentView === 'kpi_manager' ? 'bg-gradient-to-r from-amber-400 to-yellow-600 border-amber-300 text-white shadow-md' : 'border-transparent text-white/70 hover:bg-white/20 hover:text-white'}`}>⭐️ ประเมินผลงานพนักงาน</button>
-              )}
+              
+              <button 
+                onClick={() => { 
+                  setCurrentView("kpi_manager"); 
+                  // ถ้ามีฟังก์ชันปิด Sidebar ในมือถือ ให้ใส่ไว้แบบนี้
+                  if (typeof setIsSidebarOpen === 'function') setIsSidebarOpen(false); 
+                }} 
+                className={`w-full flex items-center gap-3 px-5 py-3.5 rounded-xl font-bold text-sm transition-all border mt-2 ${currentView === 'kpi_manager' ? 'bg-gradient-to-r from-amber-400 to-yellow-600 border-amber-300 text-white shadow-md' : 'border-transparent text-white/70 hover:bg-white/20 hover:text-white'}`}
+              >
+                ⭐️ {user?.role === 'admin' || user?.role === 'ceo' ? 'ประเมินผลงานพนักงาน' : 'ผลประเมิน KPI ของฉัน'}
+              </button>
+              
               {userMenus.includes('menu_payroll') && (
-                <button onClick={() => { setCurrentView("payroll"); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-5 py-3.5 rounded-xl font-bold text-sm transition-all border ${currentView === 'payroll' ? 'bg-gradient-to-r from-emerald-500 to-teal-400 border-emerald-400 text-white shadow-md' : 'border-transparent text-white/70 hover:bg-white/20 hover:text-white'}`}>💸 {t.menuPayroll}</button>
+                <button onClick={() => { setCurrentView("payroll"); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-5 py-3.5 rounded-xl font-bold text-sm transition-all border mt-2 ${currentView === 'payroll' ? 'bg-gradient-to-r from-emerald-500 to-teal-400 border-emerald-400 text-white shadow-md' : 'border-transparent text-white/70 hover:bg-white/20 hover:text-white'}`}>💸 {t.menuPayroll}</button>
               )}
-              {/* 🟢 ซ่อนเมนูให้เห็นเฉพาะ Admin และ CEO */}
+              
+              {/* 🚀 ปุ่มที่ 2: ระบบแจ้งโอนค่า Ads (แก้ไข currentView ให้ตรงกับหน้าจอของจริง) */}
               {(user?.role === 'admin' || user?.role === 'ceo') && (
                 <button 
-                  onClick={() => setCurrentView('ads')} /* เปลี่ยนเป็นชื่อ view หรือหน้าที่พี่ตั้งไว้นะครับ */
-                  className={`w-full flex items-center gap-3 px-5 py-3.5 rounded-2xl font-bold text-sm transition-all ${
-                    currentView === 'ads' 
-                      ? 'bg-white/20 text-white shadow-lg border border-white/10' 
-                      : 'text-rose-200/70 hover:bg-white/5 hover:text-white'
+                  onClick={() => { setCurrentView("ads_management"); setIsSidebarOpen(false); }}
+                  className={`w-full flex items-center gap-3 px-5 py-3.5 rounded-xl font-bold text-sm transition-all border mt-2 ${
+                    currentView === 'ads_management' 
+                      ? 'bg-gradient-to-r from-blue-500 to-indigo-500 border-blue-400 text-white shadow-md' 
+                      : 'border-transparent text-white/70 hover:bg-white/20 hover:text-white'
                   }`}
                 >
                   📢 แจ้งโอนค่า Ads
@@ -5396,96 +5937,99 @@ const executeRejectWithPopup = async (record, type, isLeave) => {
         <div className="absolute top-0 right-0 w-96 h-96 bg-pink-200 rounded-full blur-[100px] opacity-40 mix-blend-multiply pointer-events-none"></div>
 
       {/* 📱 Header & Top Bar (โฉมใหม่: ปุ่มแคปซูล มีไอคอน+ข้อความสั้นๆ) */}
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between p-4 md:p-8 z-20 gap-4 sticky top-0 bg-white/40 backdrop-blur-md border-b border-white shadow-sm">
-          
-          {/* ฝั่งซ้าย: แฮมเบอร์เกอร์ + ชื่อพนักงาน */}
-          <div className="flex items-center justify-between w-full md:w-auto">
-            <div className="flex items-center gap-3">
-              <button className="lg:hidden text-slate-800 bg-white p-2 rounded-lg shadow-sm border border-slate-100" onClick={() => setIsSidebarOpen(true)}>
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
-              </button>
-              <div>
-                <p className="text-pink-500 font-bold text-xs md:text-sm tracking-widest uppercase mb-1">{currentView === 'approvals' ? t.adminCenter : currentView.startsWith('settings') ? t.menuSettings : t.welcome}</p>
-                <h2 className="text-xl md:text-3xl font-black text-slate-800 tracking-tight">{currentView === 'approvals' ? t.adminCenter : currentView.startsWith('settings') ? t.menuSettings : user?.full_name}</h2>
-              </div>
-            </div>
-          </div>
-          
-          {/* ฝั่งขวา: เมนูด่วน (แคปซูล) + กระดิ่ง + เปลี่ยนภาษา */}
-          <div className="flex items-center gap-2 md:gap-3 w-full md:w-auto justify-end flex-wrap sm:flex-nowrap">
-            
-            {/* 🚀 Quick Menu (ปุ่มแคปซูล: ไอคอน + ข้อความสั้นๆ ให้รู้ว่าคืออะไร) */}
-            <div className="flex items-center gap-1.5 md:gap-2 mr-1">
-              {/* ปุ่มยื่นใบลา */}
-              <button 
-                onClick={() => setIsLeaveModalOpen(true)} 
-                className="h-9 md:h-10 px-3 md:px-4 bg-gradient-to-tr from-pink-500 to-rose-400 text-white rounded-full flex items-center justify-center gap-1.5 shadow-md shadow-pink-200 hover:scale-105 transition-transform"
-              >
-                <span className="text-sm md:text-base">🏖️</span>
-                {/* ✨ เปลี่ยนคำว่า "ยื่นลา" เป็น {t.createBtn} */}
-                <span className="text-[10px] md:text-xs font-black tracking-wide whitespace-nowrap">{t.createBtn}</span>
-              </button>
-
-              {/* ปุ่มแจ้งปรับปรุง */}
-              <button 
-                onClick={() => setIsAdjustModalOpen(true)} 
-                className="h-9 md:h-10 px-3 md:px-4 bg-white border border-slate-200 text-slate-600 hover:text-purple-600 hover:border-purple-300 hover:bg-purple-50 rounded-full flex items-center justify-center gap-1.5 shadow-sm hover:scale-105 transition-all"
-              >
-                <span className="text-sm md:text-base">📝</span>
-                {/* ✨ เปลี่ยนคำว่า "ปรับปรุง" เป็น {t.adjustBtn} */}
-                <span className="text-[10px] md:text-xs font-black tracking-wide whitespace-nowrap">{t.adjustBtn}</span>
-              </button>
-            </div>
-
-            {/* 🔔 Notification Bell */}
-            <div className="relative">
-              <button onClick={() => setIsNotifOpen(!isNotifOpen)} className="w-9 h-9 md:w-10 md:h-10 bg-white rounded-full flex items-center justify-center shadow-sm border border-slate-200 text-slate-500 hover:text-pink-500 transition-colors relative">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
-                {unreadCount > 0 && <span className="absolute top-0 right-0 -mt-1 -mr-1 bg-rose-500 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full border-2 border-white">{unreadCount}</span>}
-              </button>
-              
-              {/* Dropdown แจ้งเตือน */}
-              {isNotifOpen && (
-                <div className="absolute right-0 mt-3 w-72 md:w-80 bg-white rounded-2xl shadow-2xl border border-slate-100 overflow-hidden z-50">
-                  <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                    <h3 className="font-black text-slate-800 text-sm">{t.notifTitle}</h3>
-                    <div className="flex gap-2">
-                      <button onClick={markAllRead} className="text-[10px] font-bold text-pink-500 hover:underline">{t.notifReadAll}</button>
-                      <button onClick={clearAllNotifs} className="text-[10px] font-bold text-slate-400 hover:text-rose-500">{t.notifClear}</button>
-                    </div>
-                  </div>
-                  <div className="max-h-[60vh] overflow-y-auto">
-        {notifications.length === 0 ? (
-          <div className="p-6 text-center text-xs text-slate-400 font-bold">{t.notifEmpty}</div>
-        ) : (
-          notifications.map((n, idx) => (
-            // ✅ เปลี่ยน key เป็น n.id ผสมกับ idx เพื่อป้องกันการชนกันของ Key เดิมใน localStorage
-            <div 
-              key={`notif-item-${n.id}-${idx}`} 
-              onClick={() => handleNotificationClick(n)} 
-              className={`p-4 border-b border-slate-50 cursor-pointer hover:bg-pink-50 transition-colors ${!n.isRead ? 'bg-pink-50/50' : 'bg-white'}`}
-            >
-              <div className="flex justify-between items-start mb-1">
-                <span className={`font-bold text-sm ${!n.isRead ? 'text-slate-800' : 'text-slate-500'}`}>{n.title}</span>
-                <span className="text-[10px] text-slate-400 font-medium whitespace-nowrap">{n.time}</span>
-              </div>
-              <p className="text-xs text-slate-500 line-clamp-2">{n.message}</p>
-            </div>
-          ))
-        )}
+<div className="flex flex-col md:flex-row items-start md:items-center justify-between p-4 md:p-8 z-20 gap-4 sticky top-0 bg-white/40 backdrop-blur-md border-b border-white shadow-sm">
+  
+  {/* ฝั่งซ้าย: แฮมเบอร์เกอร์ + ชื่อพนักงาน */}
+  <div className="flex items-center justify-between w-full md:w-auto">
+    <div className="flex items-center gap-3">
+      <button className="lg:hidden text-slate-800 bg-white p-2 rounded-lg shadow-sm border border-slate-100" onClick={() => setIsSidebarOpen(true)}>
+        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
+      </button>
+      <div>
+        <p className="text-pink-500 font-bold text-xs md:text-sm tracking-widest uppercase mb-1">{currentView === 'approvals' ? t.adminCenter : currentView.startsWith('settings') ? t.menuSettings : t.welcome}</p>
+        <h2 className="text-xl md:text-3xl font-black text-slate-800 tracking-tight">{currentView === 'approvals' ? t.adminCenter : currentView.startsWith('settings') ? t.menuSettings : user?.full_name}</h2>
       </div>
-                </div>
-              )}
-            </div>
+    </div>
+  </div>
+  
+  {/* ฝั่งขวา: เมนูด่วน (แคปซูล) + กระดิ่ง + เปลี่ยนภาษา */}
+  <div className="flex items-center gap-2 md:gap-3 w-full md:w-auto justify-end flex-wrap sm:flex-nowrap">
+    
+    {/* 🌤️ วิดเจ็ตสภาพอากาศ (เพิ่มใหม่) */}
+    <WeatherWidget />
 
-            {/* 🌐 เปลี่ยนภาษา */}
-            <div className="bg-white p-1 rounded-full shadow-sm border border-slate-200 flex items-center">
-              <button onClick={() => changeLang("TH")} className={`px-3 md:px-4 py-1.5 rounded-full font-bold text-[10px] md:text-xs transition-all ${lang === "TH" ? "bg-slate-800 text-white shadow-md" : "text-slate-400 hover:text-slate-600"}`}>TH</button>
-              <button onClick={() => changeLang("EN")} className={`px-3 md:px-4 py-1.5 rounded-full font-bold text-[10px] md:text-xs transition-all ${lang === "EN" ? "bg-slate-800 text-white shadow-md" : "text-slate-400 hover:text-slate-600"}`}>EN</button>
+    {/* 🚀 Quick Menu (ปุ่มแคปซูล: ไอคอน + ข้อความสั้นๆ ให้รู้ว่าคืออะไร) */}
+    <div className="flex items-center gap-1.5 md:gap-2 mr-1">
+      {/* ปุ่มยื่นใบลา */}
+      <button 
+        onClick={() => setIsLeaveModalOpen(true)} 
+        className="h-9 md:h-10 px-3 md:px-4 bg-gradient-to-tr from-pink-500 to-rose-400 text-white rounded-full flex items-center justify-center gap-1.5 shadow-md shadow-pink-200 hover:scale-105 transition-transform"
+      >
+        <span className="text-sm md:text-base">🏖️</span>
+        {/* ✨ เปลี่ยนคำว่า "ยื่นลา" เป็น {t.createBtn} */}
+        <span className="text-[10px] md:text-xs font-black tracking-wide whitespace-nowrap">{t.createBtn}</span>
+      </button>
+
+      {/* ปุ่มแจ้งปรับปรุง */}
+      <button 
+        onClick={() => setIsAdjustModalOpen(true)} 
+        className="h-9 md:h-10 px-3 md:px-4 bg-white border border-slate-200 text-slate-600 hover:text-purple-600 hover:border-purple-300 hover:bg-purple-50 rounded-full flex items-center justify-center gap-1.5 shadow-sm hover:scale-105 transition-all"
+      >
+        <span className="text-sm md:text-base">📝</span>
+        {/* ✨ เปลี่ยนคำว่า "ปรับปรุง" เป็น {t.adjustBtn} */}
+        <span className="text-[10px] md:text-xs font-black tracking-wide whitespace-nowrap">{t.adjustBtn}</span>
+      </button>
+    </div>
+
+    {/* 🔔 Notification Bell */}
+    <div className="relative">
+      <button onClick={() => setIsNotifOpen(!isNotifOpen)} className="w-9 h-9 md:w-10 md:h-10 bg-white rounded-full flex items-center justify-center shadow-sm border border-slate-200 text-slate-500 hover:text-pink-500 transition-colors relative">
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>
+        {unreadCount > 0 && <span className="absolute top-0 right-0 -mt-1 -mr-1 bg-rose-500 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full border-2 border-white">{unreadCount}</span>}
+      </button>
+      
+      {/* Dropdown แจ้งเตือน */}
+      {isNotifOpen && (
+        <div className="absolute right-0 mt-3 w-72 md:w-80 bg-white rounded-2xl shadow-2xl border border-slate-100 overflow-hidden z-50">
+          <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+            <h3 className="font-black text-slate-800 text-sm">{t.notifTitle}</h3>
+            <div className="flex gap-2">
+              <button onClick={markAllRead} className="text-[10px] font-bold text-pink-500 hover:underline">{t.notifReadAll}</button>
+              <button onClick={clearAllNotifs} className="text-[10px] font-bold text-slate-400 hover:text-rose-500">{t.notifClear}</button>
             </div>
-            
           </div>
+          <div className="max-h-[60vh] overflow-y-auto">
+{notifications.length === 0 ? (
+  <div className="p-6 text-center text-xs text-slate-400 font-bold">{t.notifEmpty}</div>
+) : (
+  notifications.map((n, idx) => (
+    // ✅ เปลี่ยน key เป็น n.id ผสมกับ idx เพื่อป้องกันการชนกันของ Key เดิมใน localStorage
+    <div 
+      key={`notif-item-${n.id}-${idx}`} 
+      onClick={() => handleNotificationClick(n)} 
+      className={`p-4 border-b border-slate-50 cursor-pointer hover:bg-pink-50 transition-colors ${!n.isRead ? 'bg-pink-50/50' : 'bg-white'}`}
+    >
+      <div className="flex justify-between items-start mb-1">
+        <span className={`font-bold text-sm ${!n.isRead ? 'text-slate-800' : 'text-slate-500'}`}>{n.title}</span>
+        <span className="text-[10px] text-slate-400 font-medium whitespace-nowrap">{n.time}</span>
+      </div>
+      <p className="text-xs text-slate-500 line-clamp-2">{n.message}</p>
+    </div>
+  ))
+)}
+</div>
         </div>
+      )}
+    </div>
+
+    {/* 🌐 เปลี่ยนภาษา */}
+    <div className="bg-white p-1 rounded-full shadow-sm border border-slate-200 flex items-center">
+      <button onClick={() => changeLang("TH")} className={`px-3 md:px-4 py-1.5 rounded-full font-bold text-[10px] md:text-xs transition-all ${lang === "TH" ? "bg-slate-800 text-white shadow-md" : "text-slate-400 hover:text-slate-600"}`}>TH</button>
+      <button onClick={() => changeLang("EN")} className={`px-3 md:px-4 py-1.5 rounded-full font-bold text-[10px] md:text-xs transition-all ${lang === "EN" ? "bg-slate-800 text-white shadow-md" : "text-slate-400 hover:text-slate-600"}`}>EN</button>
+    </div>
+    
+  </div>
+</div>
 
     {/* ========================================================================= */}
       {/* 📸 VIEW: LIVE TIME TRACKING (V.6.9 แก้ไขให้ CEO เห็นปุ่ม รองรับตัวพิมพ์เล็ก/ใหญ่) */}
@@ -5936,7 +6480,7 @@ const executeRejectWithPopup = async (record, type, isLeave) => {
                                   });
                                   
                                   const apiKeys = [
-                                   
+                                  
                                   ];
                                   
                                   let extractedNumber = null;
@@ -6628,7 +7172,7 @@ const executeRejectWithPopup = async (record, type, isLeave) => {
 
 
 {/* ========================================================================= */}
-{/* 📊 VIEW: ALL LIVE HISTORY (V.6.2 เพิ่ม Scrollbar ด้านบนสุดของตาราง) */}
+{/* 📊 VIEW: ALL LIVE HISTORY (V.6.3 เคลียร์บั๊ก Hydration Error ในตาราง 100%) */}
 {/* ========================================================================= */}
 {currentView === "live_history" && (
   <div className="px-4 md:px-8 pb-8 z-10 flex-1 flex flex-col w-full mt-4 animate-fade-in">
@@ -6695,14 +7239,14 @@ const executeRejectWithPopup = async (record, type, isLeave) => {
                   🔄 รีเฟรชข้อมูล
                 </button>
 
-                {isExecutive && (
+                {isExecutive ? (
                   <button 
                     onClick={() => exportLiveHistory(filteredHistory)} 
                     className="bg-emerald-50 text-emerald-600 border border-emerald-200 px-4 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-emerald-100 transition-all flex items-center gap-2"
                   >
                     📥 Export Excel
                   </button>
-                )}
+                ) : null}
               </div>
             </div>
 
@@ -6739,8 +7283,7 @@ const executeRejectWithPopup = async (record, type, isLeave) => {
                 }
               }}
             >
-               {/* กล่องหลอกๆ ที่มีความกว้างเท่ากับตารางเป๊ะๆ เพื่อให้เกิด Scrollbar */}
-               <div style={{ width: '1300px', height: '1px' }}></div>
+               <div style={{ width: '1400px', height: '1px' }}></div>
             </div>
 
             {/* 📋 ตารางข้อมูลหลัก */}
@@ -6754,27 +7297,28 @@ const executeRejectWithPopup = async (record, type, isLeave) => {
                 }
               }}
             >
-              <table className="w-full text-left whitespace-nowrap" style={{ minWidth: '1300px' }}>
+              <table className="w-full text-left whitespace-nowrap" style={{ minWidth: '1400px' }}>
                 <thead className="text-[10px] md:text-xs text-slate-400 uppercase bg-slate-50 border-b border-slate-100 sticky top-0 z-10 shadow-sm">
                   <tr>
                     <th className="p-4 rounded-tl-xl text-indigo-600">📅 วันที่ / เวลา</th>
-                    {isExecutive && <th className="p-4">👤 ชื่อพนักงาน</th>}
+                    {isExecutive ? <th className="p-4">👤 ชื่อพนักงาน</th> : null}
                     <th className="p-4 text-center">คิว</th>
                     <th className="p-4">📱 แพลตฟอร์ม</th>
                     <th className="p-4 text-right">ยอดตั้งต้น</th>
                     <th className="p-4 text-right text-rose-500 font-black">ยอดจบ</th>
                     <th className="p-4 text-right text-emerald-600 font-black">ยอดสุทธิ (฿)</th>
+                    <th className="p-4">หมายเหตุ</th>
                     <th className="p-4 text-center">หลักฐาน</th>
-                    {isExecutive && <th className="p-4 text-center">สถานะเช็ค</th>}
-                    {isExecutive && <th className="p-4 text-center rounded-tr-xl">จัดการ</th>}
+                    {isExecutive ? <th className="p-4 text-center">สถานะเช็ค</th> : null}
+                    {isExecutive ? <th className="p-4 text-center rounded-tr-xl">จัดการ</th> : null}
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-slate-100">
                   {[...filteredHistory].sort((a, b) => {
                     const dDiff = new Date(a.live_date).getTime() - new Date(b.live_date).getTime();
                     return dDiff !== 0 ? dDiff : (a.start_time || '').localeCompare(b.start_time || '');
                   }).map((item) => (
-                    <tr key={item.id} className={`border-b border-slate-50 transition-colors group ${item.is_checked ? 'bg-emerald-50/30' : 'hover:bg-slate-50/80'}`}>
+                    <tr key={item.id} className={`hover:bg-pink-50/40 transition-colors group ${item.is_checked ? 'bg-emerald-50/30' : 'bg-white'}`}>
                       
                       <td className="p-4">
                         <div className="flex flex-col">
@@ -6794,23 +7338,20 @@ const executeRejectWithPopup = async (record, type, isLeave) => {
                         </div>
                       </td>
                       
-                      {isExecutive && (
+                      {isExecutive ? (
                         <td className="p-4">
                           <div className="flex flex-col">
                             <p className="font-black text-[15px] text-slate-800">
                               {item.employees?.full_name || item.streamer_name || 'ไม่ระบุชื่อ'}
                             </p>
-                            {item.employees?.nickname && (
+                            {item.employees?.nickname ? (
                               <span className="mt-1 w-fit bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-md text-[11px] font-black border border-indigo-100">
                                 ✨ {item.employees.nickname}
                               </span>
-                            )}
-                            {item.remarks && item.remarks !== '-' && (
-                              <p className="text-[10px] text-slate-400 truncate max-w-[150px] mt-1.5 font-bold italic">📝 {item.remarks}</p>
-                            )}
+                            ) : null}
                           </div>
                         </td>
-                      )}
+                      ) : null}
 
                       <td className="p-4 text-center">
                         {String(item.sequence_type).includes('แรก') || item.is_first_queue ? ( 
@@ -6824,13 +7365,29 @@ const executeRejectWithPopup = async (record, type, isLeave) => {
                           </div> 
                         )}
                       </td>
+                      
                       <td className="p-4">
                         <span className="bg-slate-800 text-white text-[10px] px-3 py-1.5 rounded-lg font-black uppercase tracking-wide border border-slate-900 shadow-sm">{item.platform}</span>
                       </td>
+                      
                       <td className="p-4 text-right text-sm font-bold text-slate-400">{Number(item.start_sales).toLocaleString()}</td>
                       <td className="p-4 text-right text-[15px] font-black text-rose-500">{Number(item.end_sales).toLocaleString()}</td>
                       <td className="p-4 text-right text-[16px] font-black text-emerald-600 bg-emerald-50/50">฿{Number(item.net_sales).toLocaleString()}</td>
                       
+                      <td className="p-4">
+                        {item.notes && item.notes !== '-' ? (
+                          <div 
+                            className="flex items-center gap-1.5 bg-orange-50 border border-orange-200 text-orange-700 px-3 py-1.5 rounded-xl shadow-sm w-fit max-w-[180px]" 
+                            title={item.notes}
+                          >
+                            <span className="text-xs shrink-0 drop-shadow-sm">📌</span>
+                            <span className="text-xs font-bold truncate">{item.notes}</span>
+                          </div>
+                        ) : (
+                          <span className="text-slate-300 font-bold ml-2">-</span>
+                        )}
+                      </td>
+
                       <td className="p-4 text-center">
                         {item.image_url ? (
                           <button onClick={() => Swal.fire({ imageUrl: item.image_url, imageAlt: 'หลักฐาน', confirmButtonText: 'ปิด', confirmButtonColor: '#4F46E5', customClass: { image: 'rounded-xl shadow-2xl' } })} className="bg-white border border-slate-200 text-slate-600 px-3 py-2 rounded-xl text-[11px] font-black shadow-sm hover:bg-slate-100 transition-all flex items-center gap-1.5 mx-auto">
@@ -6839,7 +7396,7 @@ const executeRejectWithPopup = async (record, type, isLeave) => {
                         ) : <span className="text-slate-300">-</span>}
                       </td>
 
-                      {isExecutive && (
+                      {isExecutive ? (
                         <td className="p-4 text-center">
                           <button 
                             onClick={async () => {
@@ -6868,9 +7425,9 @@ const executeRejectWithPopup = async (record, type, isLeave) => {
                             {item.is_checked ? '✅ เช็คแล้ว' : '❌ ยังไม่เช็ค'}
                           </button>
                         </td>
-                      )}
+                      ) : null}
                       
-                      {isExecutive && (
+                      {isExecutive ? (
                         <td className="p-4 text-center">
                           <div className="flex justify-center gap-2">
                             <button onClick={() => { if(typeof handleHumanAuditLive === 'function') handleHumanAuditLive(item); }} className="bg-indigo-50 text-indigo-600 p-2.5 rounded-xl hover:bg-indigo-600 hover:text-white transition-all shadow-sm border border-indigo-100" title="ตรวจสอบละเอียด">
@@ -6885,17 +7442,18 @@ const executeRejectWithPopup = async (record, type, isLeave) => {
                             </button>
                           </div>
                         </td>
-                      )}
+                      ) : null}
                     </tr>
                   ))}
-                  {filteredHistory.length === 0 && (
+                  
+                  {filteredHistory.length === 0 ? (
                     <tr>
-                      <td colSpan={isExecutive ? "10" : "8"} className="p-20 text-center text-slate-400 font-black">
+                      <td colSpan={isExecutive ? 11 : 8} className="p-20 text-center text-slate-400 font-black">
                         <div className="text-6xl mb-4 grayscale opacity-20">📸</div>
                         <p className="text-lg">ไม่พบข้อมูลในรอบบิลปัจจุบันครับพี่</p>
                       </td>
                     </tr>
-                  )}
+                  ) : null}
                 </tbody>
               </table>
             </div>
@@ -6907,258 +7465,259 @@ const executeRejectWithPopup = async (record, type, isLeave) => {
 )}
 
 {/* ========================================================================= */}
-{/* 📊 VIEW: SALES HISTORY (V.3.5 เรียงวันที่ 26 ขึ้นก่อนตามรอบบิล) */}
-{/* ========================================================================= */}
-{currentView === "menu_sales_history" && (
-  <div className="px-4 md:px-8 pb-8 z-10 flex-1 flex flex-col w-full mt-4 animate-fade-in">
-    <div className="bg-white/80 backdrop-blur-xl rounded-[2.5rem] p-6 md:p-8 shadow-sm border border-white flex-1 flex flex-col w-full max-w-7xl mx-auto">
-      
-      {/* 1. Header & Controls: เน้นการเลือกปี/เดือน และพนักงาน */}
-      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 mb-8 border-b border-slate-100 pb-6">
-        <div>
-          <h3 className="font-black text-slate-800 text-2xl flex items-center gap-2">📊 สถิติยอดขายสะสม</h3>
-          {(() => {
-            const thaiMonths = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
-            const [y, m] = selectedHistoryMonth.split('-').map(Number);
-            let pY = y, pM = m - 1;
-            if (pM < 1) { pM = 12; pY -= 1; }
-            return (
-              <p className="text-sm text-pink-500 font-bold uppercase tracking-widest mt-1">
-                ประจำปี {y + 543} <span className="ml-2 bg-pink-100 text-pink-700 px-3 py-1 rounded-full text-xs font-black">รอบบิล: 26 {thaiMonths[pM - 1]} {pY + 543} - 25 {thaiMonths[m - 1]} {y + 543}</span>
-              </p>
-            );
-          })()}
-        </div>
-        
-        <div className="flex flex-wrap gap-3 w-full lg:w-auto">
-          {/* 👥 ตัวเลือกพนักงาน */}
-          {(user?.role === 'admin' || user?.role === 'ceo') && (
-            <div className="flex-1 lg:flex-none min-w-[220px] bg-white p-1 rounded-2xl border border-slate-200 shadow-sm flex items-center">
-              <span className="pl-3 text-xs font-black text-slate-400 uppercase">พนักงาน:</span>
-              <select 
-                value={historyFilterEmp}
-                onChange={(e) => setHistoryFilterEmp(e.target.value)}
-                className="bg-transparent border-none font-black text-slate-700 px-3 py-2 outline-none cursor-pointer flex-1"
-              >
-                <option value="all">👥 พนักงานทุกคน (รวมทั้งบริษัท)</option>
-                {employees?.map(emp => (
-                  <option key={emp.id} value={emp.id}>
-                    {emp.full_name} {emp.nickname ? `(${emp.nickname})` : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {/* 📅 ตัวเลือกเดือน/ปี */}
-          <div className="flex-1 lg:flex-none bg-slate-100 p-1.5 rounded-2xl flex items-center shadow-inner">
-            <span className="pl-3 text-xs font-black text-slate-400 uppercase">เดือน/ปี:</span>
-            <input 
-              type="month" 
-              value={selectedHistoryMonth} 
-              onChange={(e) => setSelectedHistoryMonth(e.target.value)}
-              className="bg-transparent border-none font-black text-slate-700 px-3 py-2 outline-none cursor-pointer"
-            />
-          </div>
-        </div>
-      </div>
-
-      {(() => {
-        // --- 🧠 ฟังก์ชันแปลงวันที่เป็นภาษาไทย ---
-        const thaiMonths = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
-        const formatThaiDate = (dateStr) => {
-          if (!dateStr) return '-';
-          const [y, m, d] = dateStr.split('-');
-          if (!y || !m || !d) return dateStr;
-          return `${d} ${thaiMonths[parseInt(m, 10) - 1]} ${parseInt(y, 10) + 543}`;
-        };
-
-        // --- 🧠 Logic คำนวณจากฐานข้อมูล ---
-        const isStaff = user?.role !== 'admin' && user?.role !== 'ceo';
-        const targetEmpId = isStaff ? user?.id : historyFilterEmp;
-        
-        const [selYear, selMonth] = selectedHistoryMonth.split('-').map(Number);
-        let sYear = selYear, sMonth = selMonth - 1;
-        if (sMonth < 1) { sMonth = 12; sYear -= 1; }
-        const pad = (n) => String(n).padStart(2, '0');
-        const cycleStart = `${sYear}-${pad(sMonth)}-26`;
-        const cycleEnd = `${selYear}-${pad(selMonth)}-25`;
-
-        const monthlyLogs = allLiveHistory?.filter(log => {
-          const matchMonth = log.live_date >= cycleStart && log.live_date <= cycleEnd;
-          const matchEmp = targetEmpId === 'all' ? true : log.employee_id === targetEmpId;
-          return matchMonth && matchEmp;
-        }) || [];
-
-        let totalSales = 0, totalNormalComm = 0, totalHolidayComm = 0;
-        
-        monthlyLogs.forEach(log => {
-          const net = Number(log.net_sales || 0);
-          totalSales += net;
-          
-          const empRate = allSalesData?.find(s => s.employee_id === log.employee_id)?.commission_rate ?? 3;
-          const camp = holidayCampaigns?.find(c => log.live_date >= c.startDate && log.live_date <= c.endDate);
-          
-          if (camp) {
-            totalHolidayComm += net * (Number(camp.rate) / 100);
-          } else {
-            totalNormalComm += net * (empRate / 100);
-          }
-        });
-
-        const platformStats = monthlyLogs.reduce((acc, log) => {
-          acc[log.platform] = (acc[log.platform] || 0) + Number(log.net_sales || 0);
-          return acc;
-        }, {});
-
-        const dailyStats = monthlyLogs.reduce((acc, log) => {
-          const date = log.live_date; 
-          if (!acc[date]) {
-            acc[date] = { total: 0, platforms: {} };
-          }
-          const net = Number(log.net_sales || 0);
-          acc[date].total += net;
-          
-          const plat = log.platform || 'ไม่ระบุช่องทาง';
-          acc[date].platforms[plat] = (acc[date].platforms[plat] || 0) + net;
-          
-          return acc;
-        }, {});
-
-        return (
-          <div className="space-y-8 overflow-y-auto pr-2 custom-scrollbar">
-            {/* 2. สรุปยอดเงิน: การ์ดตัวเลขสำคัญ */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-slate-900 p-6 rounded-[2rem] text-white shadow-lg border border-slate-700 flex flex-col justify-center">
-                <p className="text-xs font-black uppercase opacity-60 tracking-widest mb-2">ยอดขายรวมสะสม</p>
-                <h4 className="text-3xl font-black">฿{totalSales.toLocaleString()}</h4>
-              </div>
-              <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col justify-center">
-                <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">คอมฯ ปกติ (สะสม)</p>
-                <h4 className="text-3xl font-black text-slate-700">฿{totalNormalComm.toLocaleString()}</h4>
-              </div>
-              <div className="bg-purple-50 p-6 rounded-[2rem] border border-purple-100 shadow-sm text-purple-700 flex flex-col justify-center">
-                <p className="text-xs font-black uppercase tracking-widest mb-2">คอมฯ พิเศษ (สะสม)</p>
-                <h4 className="text-3xl font-black">฿{totalHolidayComm.toLocaleString()}</h4>
-              </div>
-              <div className="bg-emerald-50 p-6 rounded-[2rem] border border-emerald-100 shadow-sm text-emerald-700 flex flex-col justify-center">
-                <p className="text-xs font-black uppercase tracking-widest mb-2">รายรับรวมสุทธิ</p>
-                <h4 className="text-3xl font-black">฿{(totalNormalComm + totalHolidayComm).toLocaleString()}</h4>
-              </div>
-            </div>
-
-            {/* แถวที่ 2: แบ่งเป็น 1/3 (แยกช่องทาง) และ 2/3 (รายวัน) */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              
-              {/* 3. สรุปผลงานแยกตามช่องทาง */}
-              <div className="lg:col-span-1 bg-slate-50 p-6 rounded-[2rem] border border-slate-200 flex flex-col h-full">
-                <h5 className="font-black text-slate-700 text-lg mb-4 flex items-center gap-2">📱 แยกช่องทาง</h5>
-                <div className="space-y-3 flex-1">
-                  {Object.entries(platformStats).length === 0 ? (
-                    <p className="text-sm text-slate-400 italic text-center py-8">ไม่มีข้อมูลการขาย</p>
-                  ) : Object.entries(platformStats)
-                      .sort((a, b) => a[0].localeCompare(b[0], 'th', { numeric: true })) 
-                      .map(([name, val]) => (
-                    <div key={name} className="bg-white p-5 rounded-2xl flex justify-between items-center shadow-sm border border-slate-100">
-                      <span className="text-base font-bold text-slate-600">{name}</span>
-                      <span className="text-lg font-black text-pink-600">฿{Number(val).toLocaleString()}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* 4. สรุปยอดขายต่อวัน */}
-              <div className="lg:col-span-2 bg-pink-50/50 p-6 rounded-[2rem] border border-pink-100 shadow-inner flex flex-col h-full">
-                <h5 className="font-black text-pink-700 text-lg mb-4 flex items-center gap-2">📅 ยอดขายรายวัน</h5>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto custom-scrollbar pr-2 flex-1 items-start">
-                  {Object.entries(dailyStats).length === 0 ? (
-                    <p className="text-sm text-pink-400/70 italic text-center py-8 col-span-full">ไม่มีข้อมูลการขาย</p>
-                  ) : Object.entries(dailyStats)
-                      // 🚩 สลับเป็น a - b เพื่อให้วันที่ 26 (วันแรกของรอบบิล) ขึ้นมาก่อน
-                      .sort((a, b) => new Date(a[0]) - new Date(b[0])) 
-                      .map(([dateStr, data]) => {
-                        const displayDate = formatThaiDate(dateStr);
-
-                        return (
-                          <div key={dateStr} className="bg-white p-4 rounded-2xl flex flex-col shadow-sm border border-pink-100 h-auto break-inside-avoid">
-                            {/* บรรทัดบน: วันที่ และ ยอดรวมของวัน */}
-                            <div className="flex justify-between items-center border-b border-pink-50 pb-3 mb-3">
-                              <span className="text-xs font-black text-slate-700 bg-slate-100 px-2 py-1.5 rounded-lg">{displayDate}</span>
-                              <span className="text-lg font-black text-pink-600">฿{Number(data.total).toLocaleString()}</span>
-                            </div>
-                            
-                            {/* บรรทัดล่าง: แยกย่อยตามช่องทาง */}
-                            <div className="flex flex-col gap-2">
-                              {Object.entries(data.platforms)
-                                .sort((a, b) => a[0].localeCompare(b[0], 'th', { numeric: true }))
-                                .map(([platName, platVal]) => (
-                                  <div key={platName} className="flex justify-between items-center px-1">
-                                    <span className="text-xs font-bold text-slate-600 flex items-center gap-1.5">
-                                      <span className="w-2 h-2 rounded-full bg-pink-300"></span>
-                                      {platName}
-                                    </span>
-                                    <span className="text-xs font-black text-slate-800">฿{Number(platVal).toLocaleString()}</span>
-                                  </div>
-                              ))}
-                            </div>
-                          </div>
-                        );
-                      })}
-                </div>
-              </div>
-            </div>
-
-            {/* แถวที่ 3: ตารางรายการรายวัน */}
-            <div className="w-full bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden flex flex-col mt-6">
-              <div className="p-6 border-b border-slate-100 bg-slate-50/80">
-                <h5 className="font-black text-slate-800 text-lg">📑 รายการลงเวลาไลฟ์สด ({monthlyLogs.length} รายการ)</h5>
-              </div>
-              <div className="overflow-x-auto max-h-[500px] overflow-y-auto custom-scrollbar">
-                <table className="w-full text-left border-collapse min-w-[800px]">
-                  <thead className="sticky top-0 bg-slate-100/95 backdrop-blur-md z-10 shadow-sm">
-                    <tr className="text-xs font-black text-slate-500 uppercase tracking-wider">
-                      <th className="p-5">วันที่</th>
-                      {targetEmpId === 'all' && <th className="p-5">พนักงาน</th>}
-                      <th className="p-5">ช่องทาง</th>
-                      <th className="p-5 text-right">ยอดขาย (฿)</th>
-                      <th className="p-5 text-center">ประเภท</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {/* 🚩 ตรงนี้เรียงเป็น a - b เพื่อให้วันที่ 26 ขึ้นก่อนอยู่แล้วครับ */}
-                    {[...monthlyLogs].sort((a,b) => new Date(a.live_date) - new Date(b.live_date)).map((log, i) => {
-                      const logDisplayDate = formatThaiDate(log.live_date);
-
-                      return (
-                        <tr key={i} className="hover:bg-pink-50/40 transition-colors">
-                          <td className="p-5 text-sm font-bold text-slate-700">{logDisplayDate}</td>
-                          {targetEmpId === 'all' && (
-                            <td className="p-5 text-sm font-black text-pink-600">{log.streamer_name || '-'}</td>
-                          )}
-                          <td className="p-5">
-                            <span className="bg-slate-100 text-xs font-black px-3 py-1.5 rounded-lg text-slate-600 uppercase border border-slate-200">{log.platform}</span>
-                          </td>
-                          <td className="p-5 text-right text-base font-black text-slate-800">฿{Number(log.net_sales).toLocaleString()}</td>
-                          <td className="p-5 text-center">
-                             {holidayCampaigns?.some(c => log.live_date >= c.startDate && log.live_date <= c.endDate) ? 
-                              <span className="text-[10px] bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-black uppercase tracking-wider border border-purple-200">Holiday</span> :
-                              <span className="text-[10px] bg-slate-100 text-slate-500 px-3 py-1 rounded-full font-black uppercase tracking-wider border border-slate-200">Normal</span>
-                             }
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+      {/* 📊 VIEW: SALES HISTORY (V.3.6 แก้ไขบั๊กเรทค่าคอมพนักงาน + เรียงวันที่ล่าสุดขึ้นก่อน) */}
+      {/* ========================================================================= */}
+      {currentView === "menu_sales_history" && (
+        <div className="px-4 md:px-8 pb-8 z-10 flex-1 flex flex-col w-full mt-4 animate-fade-in">
+          <div className="bg-white/80 backdrop-blur-xl rounded-[2.5rem] p-6 md:p-8 shadow-sm border border-white flex-1 flex flex-col w-full max-w-7xl mx-auto">
             
+            {/* 1. Header & Controls: เน้นการเลือกปี/เดือน และพนักงาน */}
+            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 mb-8 border-b border-slate-100 pb-6">
+              <div>
+                <h3 className="font-black text-slate-800 text-2xl flex items-center gap-2">📊 สถิติยอดขายสะสม</h3>
+                {(() => {
+                  const thaiMonths = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
+                  const [y, m] = selectedHistoryMonth.split('-').map(Number);
+                  let pY = y, pM = m - 1;
+                  if (pM < 1) { pM = 12; pY -= 1; }
+                  return (
+                    <p className="text-sm text-pink-500 font-bold uppercase tracking-widest mt-1">
+                      ประจำปี {y + 543} <span className="ml-2 bg-pink-100 text-pink-700 px-3 py-1 rounded-full text-xs font-black">รอบบิล: 26 {thaiMonths[pM - 1]} {pY + 543} - 25 {thaiMonths[m - 1]} {y + 543}</span>
+                    </p>
+                  );
+                })()}
+              </div>
+              
+              <div className="flex flex-wrap gap-3 w-full lg:w-auto">
+                {/* 👥 ตัวเลือกพนักงาน */}
+                {(user?.role === 'admin' || user?.role === 'ceo') && (
+                  <div className="flex-1 lg:flex-none min-w-[220px] bg-white p-1 rounded-2xl border border-slate-200 shadow-sm flex items-center">
+                    <span className="pl-3 text-xs font-black text-slate-400 uppercase">พนักงาน:</span>
+                    <select 
+                      value={historyFilterEmp}
+                      onChange={(e) => setHistoryFilterEmp(e.target.value)}
+                      className="bg-transparent border-none font-black text-slate-700 px-3 py-2 outline-none cursor-pointer flex-1"
+                    >
+                      <option value="all">👥 พนักงานทุกคน (รวมทั้งบริษัท)</option>
+                      {employees?.map(emp => (
+                        <option key={emp.id} value={emp.id}>
+                          {emp.full_name} {emp.nickname ? `(${emp.nickname})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* 📅 ตัวเลือกเดือน/ปี */}
+                <div className="flex-1 lg:flex-none bg-slate-100 p-1.5 rounded-2xl flex items-center shadow-inner">
+                  <span className="pl-3 text-xs font-black text-slate-400 uppercase">เดือน/ปี:</span>
+                  <input 
+                    type="month" 
+                    value={selectedHistoryMonth} 
+                    onChange={(e) => setSelectedHistoryMonth(e.target.value)}
+                    className="bg-transparent border-none font-black text-slate-700 px-3 py-2 outline-none cursor-pointer"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {(() => {
+              // --- 🧠 ฟังก์ชันแปลงวันที่เป็นภาษาไทย ---
+              const thaiMonths = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
+              const formatThaiDate = (dateStr) => {
+                if (!dateStr) return '-';
+                const [y, m, d] = dateStr.split('-');
+                if (!y || !m || !d) return dateStr;
+                return `${d} ${thaiMonths[parseInt(m, 10) - 1]} ${parseInt(y, 10) + 543}`;
+              };
+
+              // --- 🧠 Logic คำนวณจากฐานข้อมูล ---
+              const isStaff = user?.role !== 'admin' && user?.role !== 'ceo';
+              const targetEmpId = isStaff ? user?.id : historyFilterEmp;
+              
+              const [selYear, selMonth] = selectedHistoryMonth.split('-').map(Number);
+              let sYear = selYear, sMonth = selMonth - 1;
+              if (sMonth < 1) { sMonth = 12; sYear -= 1; }
+              const pad = (n) => String(n).padStart(2, '0');
+              const cycleStart = `${sYear}-${pad(sMonth)}-26`;
+              const cycleEnd = `${selYear}-${pad(selMonth)}-25`;
+
+              const monthlyLogs = allLiveHistory?.filter(log => {
+                const matchMonth = log.live_date >= cycleStart && log.live_date <= cycleEnd;
+                const matchEmp = targetEmpId === 'all' ? true : log.employee_id === targetEmpId;
+                return matchMonth && matchEmp;
+              }) || [];
+
+              let totalSales = 0, totalNormalComm = 0, totalHolidayComm = 0;
+              
+              monthlyLogs.forEach(log => {
+                const net = Number(log.net_sales || 0);
+                totalSales += net;
+                
+                // 🚨 FIX: ดึงเรทค่าคอมให้ถูกต้อง! ถ้าเป็นพนักงานให้ดึงจาก salesData ของตัวเอง ถ้าแอดมินดึงจาก allSalesData
+                const empRate = isStaff ? (salesData?.commission_rate || 0) : (allSalesData?.find(s => s.employee_id === log.employee_id)?.commission_rate ?? 0);
+                const camp = holidayCampaigns?.find(c => log.live_date >= c.startDate && log.live_date <= c.endDate);
+                
+                if (camp) {
+                  totalHolidayComm += net * (Number(camp.rate) / 100);
+                } else {
+                  totalNormalComm += net * (empRate / 100);
+                }
+              });
+
+              const platformStats = monthlyLogs.reduce((acc, log) => {
+                acc[log.platform] = (acc[log.platform] || 0) + Number(log.net_sales || 0);
+                return acc;
+              }, {});
+
+              const dailyStats = monthlyLogs.reduce((acc, log) => {
+                const date = log.live_date; 
+                if (!acc[date]) {
+                  acc[date] = { total: 0, platforms: {} };
+                }
+                const net = Number(log.net_sales || 0);
+                acc[date].total += net;
+                
+                const plat = log.platform || 'ไม่ระบุช่องทาง';
+                acc[date].platforms[plat] = (acc[date].platforms[plat] || 0) + net;
+                
+                return acc;
+              }, {});
+
+              return (
+                <div className="space-y-8 overflow-y-auto pr-2 custom-scrollbar">
+                  {/* 2. สรุปยอดเงิน: การ์ดตัวเลขสำคัญ */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="bg-slate-900 p-6 rounded-[2rem] text-white shadow-lg border border-slate-700 flex flex-col justify-center">
+                      <p className="text-xs font-black uppercase opacity-60 tracking-widest mb-2">ยอดขายรวมสะสม</p>
+                      <h4 className="text-3xl font-black">฿{totalSales.toLocaleString()}</h4>
+                    </div>
+                    <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col justify-center">
+                      <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">คอมฯ ปกติ (สะสม)</p>
+                      <h4 className="text-3xl font-black text-slate-700">฿{totalNormalComm.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</h4>
+                    </div>
+                    <div className="bg-purple-50 p-6 rounded-[2rem] border border-purple-100 shadow-sm text-purple-700 flex flex-col justify-center">
+                      <p className="text-xs font-black uppercase tracking-widest mb-2">คอมฯ พิเศษ (สะสม)</p>
+                      <h4 className="text-3xl font-black">฿{totalHolidayComm.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</h4>
+                    </div>
+                    <div className="bg-emerald-50 p-6 rounded-[2rem] border border-emerald-100 shadow-sm text-emerald-700 flex flex-col justify-center">
+                      <p className="text-xs font-black uppercase tracking-widest mb-2">คอมมิชชันรวมสุทธิ</p>
+                      <h4 className="text-3xl font-black">฿{(totalNormalComm + totalHolidayComm).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</h4>
+                    </div>
+                  </div>
+
+                  {/* แถวที่ 2: แบ่งเป็น 1/3 (แยกช่องทาง) และ 2/3 (รายวัน) */}
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    
+                    {/* 3. สรุปผลงานแยกตามช่องทาง */}
+                    <div className="lg:col-span-1 bg-slate-50 p-6 rounded-[2rem] border border-slate-200 flex flex-col h-full">
+                      <h5 className="font-black text-slate-700 text-lg mb-4 flex items-center gap-2">📱 แยกช่องทาง</h5>
+                      <div className="space-y-3 flex-1">
+                        {Object.entries(platformStats).length === 0 ? (
+                          <p className="text-sm text-slate-400 italic text-center py-8">ไม่มีข้อมูลการขาย</p>
+                        ) : Object.entries(platformStats)
+                            .sort((a, b) => a[0].localeCompare(b[0], 'th', { numeric: true })) 
+                            .map(([name, val]) => (
+                          <div key={name} className="bg-white p-5 rounded-2xl flex justify-between items-center shadow-sm border border-slate-100">
+                            <span className="text-sm md:text-base font-bold text-slate-600 truncate mr-2" title={name}>{name}</span>
+                            <span className="text-base md:text-lg font-black text-pink-600 shrink-0">฿{Number(val).toLocaleString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 4. สรุปยอดขายต่อวัน */}
+                    <div className="lg:col-span-2 bg-pink-50/50 p-6 rounded-[2rem] border border-pink-100 shadow-inner flex flex-col h-full">
+                      <h5 className="font-black text-pink-700 text-lg mb-4 flex items-center gap-2">📅 ยอดขายรายวัน</h5>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto custom-scrollbar pr-2 flex-1 items-start">
+                        {Object.entries(dailyStats).length === 0 ? (
+                          <p className="text-sm text-pink-400/70 italic text-center py-8 col-span-full">ไม่มีข้อมูลการขาย</p>
+                        ) : Object.entries(dailyStats)
+                            // 🚨 FIX: เรียงวันที่จากใหม่สุด ไปเก่าสุด (b - a) ให้วันล่าสุดอยู่บนสุด! พนักงานไม่ต้องเลื่อนหาให้เหนื่อย
+                            .sort((a, b) => new Date(b[0]) - new Date(a[0])) 
+                            .map(([dateStr, data]) => {
+                              const displayDate = formatThaiDate(dateStr);
+
+                              return (
+                                <div key={dateStr} className="bg-white p-4 rounded-2xl flex flex-col shadow-sm border border-pink-100 h-auto break-inside-avoid">
+                                  {/* บรรทัดบน: วันที่ และ ยอดรวมของวัน */}
+                                  <div className="flex justify-between items-center border-b border-pink-50 pb-3 mb-3">
+                                    <span className="text-xs font-black text-slate-700 bg-slate-100 px-2 py-1.5 rounded-lg">{displayDate}</span>
+                                    <span className="text-lg font-black text-pink-600">฿{Number(data.total).toLocaleString()}</span>
+                                  </div>
+                                  
+                                  {/* บรรทัดล่าง: แยกย่อยตามช่องทาง */}
+                                  <div className="flex flex-col gap-2">
+                                    {Object.entries(data.platforms)
+                                      .sort((a, b) => a[0].localeCompare(b[0], 'th', { numeric: true }))
+                                      .map(([platName, platVal]) => (
+                                        <div key={platName} className="flex justify-between items-center px-1">
+                                          <span className="text-xs font-bold text-slate-600 flex items-center gap-1.5 truncate mr-2" title={platName}>
+                                            <span className="w-2 h-2 rounded-full bg-pink-300 shrink-0"></span>
+                                            <span className="truncate">{platName}</span>
+                                          </span>
+                                          <span className="text-xs font-black text-slate-800 shrink-0">฿{Number(platVal).toLocaleString()}</span>
+                                        </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* แถวที่ 3: ตารางรายการรายวัน */}
+                  <div className="w-full bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden flex flex-col mt-6">
+                    <div className="p-6 border-b border-slate-100 bg-slate-50/80">
+                      <h5 className="font-black text-slate-800 text-lg">📑 รายการลงเวลาไลฟ์สด ({monthlyLogs.length} รายการ)</h5>
+                    </div>
+                    <div className="overflow-x-auto max-h-[500px] overflow-y-auto custom-scrollbar">
+                      <table className="w-full text-left border-collapse min-w-[800px]">
+                        <thead className="sticky top-0 bg-slate-100/95 backdrop-blur-md z-10 shadow-sm">
+                          <tr className="text-xs font-black text-slate-500 uppercase tracking-wider">
+                            <th className="p-5">วันที่</th>
+                            {targetEmpId === 'all' && <th className="p-5">พนักงาน</th>}
+                            <th className="p-5">ช่องทาง</th>
+                            <th className="p-5 text-right">ยอดขาย (฿)</th>
+                            <th className="p-5 text-center">ประเภท</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {/* 🚨 FIX: เรียงข้อมูลในตารางจากใหม่สุดไปเก่าสุดเช่นกัน */}
+                          {[...monthlyLogs].sort((a,b) => new Date(b.live_date) - new Date(a.live_date)).map((log, i) => {
+                            const logDisplayDate = formatThaiDate(log.live_date);
+
+                            return (
+                              <tr key={i} className="hover:bg-pink-50/40 transition-colors">
+                                <td className="p-5 text-sm font-bold text-slate-700">{logDisplayDate}</td>
+                                {targetEmpId === 'all' && (
+                                  <td className="p-5 text-sm font-black text-pink-600">{log.streamer_name || '-'}</td>
+                                )}
+                                <td className="p-5">
+                                  <span className="bg-slate-100 text-xs font-black px-3 py-1.5 rounded-lg text-slate-600 uppercase border border-slate-200">{log.platform}</span>
+                                </td>
+                                <td className="p-5 text-right text-base font-black text-slate-800">฿{Number(log.net_sales).toLocaleString()}</td>
+                                <td className="p-5 text-center">
+                                   {holidayCampaigns?.some(c => log.live_date >= c.startDate && log.live_date <= c.endDate) ? 
+                                    <span className="text-[10px] bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-black uppercase tracking-wider border border-purple-200">Holiday</span> :
+                                    <span className="text-[10px] bg-slate-100 text-slate-500 px-3 py-1 rounded-full font-black uppercase tracking-wider border border-slate-200">Normal</span>
+                                   }
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  
+                </div>
+              );
+            })()}
           </div>
-        );
-      })()}
-    </div>
-  </div>
-)}
+        </div>
+      )}
 
 {/* ========================================================================= */}
         {/* 📢 VIEW: NEWS TICKER (แถบตัววิ่ง - แก้ไขเรื่อง z-index ไม่ให้บังแจ้งเตือน) */}
@@ -8335,147 +8894,473 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
         </div>
       )}
 
+{/* ========================================================================= */}
+      {/* 📈 VIEW: ADS PERFORMANCE (แสดงข้อมูลไหลยาวทั้งหมด ค้นหาวันที่ได้อิสระ) */}
+      {/* ========================================================================= */}
+      {currentView === "ads_performance" && (user?.role === 'admin' || user?.role === 'ceo') && (
+        <div className="px-2 md:px-8 pb-8 z-10 flex-1 flex flex-col w-full mt-4 animate-fade-in overflow-x-hidden font-sans">
+          <div className="bg-white/80 backdrop-blur-xl rounded-[2rem] p-4 md:p-8 shadow-sm border border-white flex-1 flex flex-col">
+            
+            {/* 🚀 Header */}
+            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 mb-6 border-b border-slate-100 pb-6">
+              <div>
+                <h3 className="font-black text-slate-800 text-xl md:text-2xl flex items-center gap-3">
+                  <span className="p-2 bg-rose-100 text-rose-600 rounded-xl shadow-sm text-xl md:text-2xl">🔥</span> 
+                  Ads Performance Tracker
+                </h3>
+                <p className="text-[11px] md:text-sm text-slate-500 font-bold mt-1">สรุปค่าโฆษณาและผลตอบแทนทั้งหมด</p>
+              </div>
+              
+              <div className="flex flex-col sm:flex-row flex-wrap items-center gap-3 w-full lg:w-auto">
+                <div className="flex items-center gap-2 bg-indigo-50 p-1.5 rounded-xl shadow-sm border border-indigo-100 w-full sm:w-auto">
+                  <span className="pl-3 text-[11px] font-bold text-indigo-500 uppercase whitespace-nowrap shrink-0">Platform:</span>
+                  <select value={filterPlatform} onChange={(e) => setFilterPlatform(e.target.value)} className="bg-transparent border-none px-2 py-1.5 font-bold text-indigo-700 outline-none cursor-pointer text-sm flex-1 sm:flex-none block w-full">
+                    <option value="">-- เลือกช่องทาง --</option>
+                    {platforms.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+                  </select>
+                </div>
+                
+                {/* 🔍 ช่องค้นหาวันที่ (กรองเฉพาะวันที่ต้องการดูได้) */}
+                <div className="flex items-center gap-2 bg-slate-50 p-1.5 rounded-xl border border-slate-200 w-full sm:w-auto shadow-sm">
+                  <span className="pl-3 text-[11px] font-bold text-slate-500 uppercase whitespace-nowrap shrink-0">ค้นหาวันที่:</span>
+                  <input type="date" value={adsFilterDate} onChange={(e) => setAdsFilterDate(e.target.value)} className="bg-transparent border-none font-bold text-slate-700 px-2 py-1.5 outline-none cursor-pointer text-sm flex-1 block" />
+                  {adsFilterDate && (
+                    <button onClick={() => setAdsFilterDate('')} className="px-3 text-rose-500 hover:text-rose-700 font-bold text-[10px] uppercase bg-rose-50 rounded-lg py-1 border border-rose-100">✕ ล้าง</button>
+                  )}
+                </div>
 
-     {/* ========================================================================= */}
-      {/* ⭐️ VIEW: KPI MANAGER (ฉบับแยกเกณฑ์: สายไลฟ์คิดยอดขาย / สายออฟฟิศคิดแต่วินัย) */}
+                {filterPlatform && dynamicAdsData.length > 0 && (
+                  <button onClick={exportAdsPerformance} className="w-full sm:w-auto h-[42px] px-6 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl font-bold text-sm shadow-sm transition-all flex items-center justify-center gap-2 active:scale-95 shrink-0">
+                    📥 Export Excel
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {!filterPlatform ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-slate-400 py-10 bg-slate-50/50 rounded-3xl border-2 border-dashed border-slate-200">
+                <span className="text-6xl mb-4">📊</span>
+                <p className="font-bold tracking-wide text-center px-4 text-sm">กรุณาเลือกช่องทางการยิงแอดด้านบนเพื่อดูข้อมูลทั้งหมด</p>
+              </div>
+            ) : (
+              <>
+                {/* 📊 Summary Cards (รวมยอดทั้งหมดเป๊ะๆ) */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4 mb-6 animate-slide-up">
+                  <div className="bg-slate-900 p-5 rounded-2xl text-white border border-slate-700 shadow-md">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">แอดกินไปสะสม (TOTAL SPEND)</p>
+                    <h4 className="text-xl md:text-2xl font-black text-rose-400 tabular-nums">฿{adsDailySummary.totalSpend.toLocaleString(undefined, {minimumFractionDigits:2})}</h4>
+                  </div>
+                  <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-1">ยอดขายสะสม (TOTAL SALES)</p>
+                    <h4 className="text-xl md:text-2xl font-black text-slate-800 tabular-nums">฿{adsDailySummary.totalIncrease.toLocaleString(undefined, {minimumFractionDigits:2})}</h4>
+                  </div>
+                  <div className="bg-indigo-50/50 p-5 rounded-2xl border border-indigo-100 text-indigo-800 shadow-sm">
+                    <p className="text-[10px] font-bold text-indigo-400 uppercase mb-1">ความคุ้มค่ารวม (AVG ROAS)</p>
+                    <h4 className={`text-xl md:text-2xl font-black tabular-nums ${dailyAvgRoas >= 4 ? 'text-emerald-500' : dailyAvgRoas >= 2 ? 'text-amber-500' : 'text-rose-500'}`}>
+                      {dailyAvgRoas.toFixed(2)}x
+                    </h4>
+                  </div>
+                </div>
+
+                {/* 💡 กล่องอธิบายเกณฑ์ประเมิน */}
+                <div className="mb-6 bg-slate-50/50 py-3 px-5 rounded-[1rem] border border-slate-200 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-sm border border-slate-100 text-lg shrink-0">💡</div>
+                    <div>
+                      <h4 className="font-bold text-slate-800 text-[13px]">เกณฑ์ประเมินประสิทธิภาพผลตอบแทน (ROAS)</h4>
+                      <p className="text-[11px] text-slate-500 font-medium mt-0.5">สูตรการคำนวณ: ยอดรายได้เพิ่มสุทธิ ÷ ค่าโฆษณาที่ใช้ไป</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <div className="flex items-center gap-1.5 bg-emerald-100/70 border border-emerald-200 px-3 py-1.5 rounded-lg">
+                      <span className="w-2.5 h-2.5 bg-emerald-400 rounded-full shadow-[0_0_4px_#34d399]"></span>
+                      <span className="text-[11px] font-bold text-emerald-700">4.00 ขึ้นไป: ประสิทธิภาพสูงเยี่ยม</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 bg-amber-100/70 border border-amber-200 px-3 py-1.5 rounded-lg">
+                      <span className="w-2.5 h-2.5 bg-amber-400 rounded-full shadow-[0_0_4px_#fbbf24]"></span>
+                      <span className="text-[11px] font-bold text-amber-700">2.00 - 3.99: ประสิทธิภาพปานกลาง</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 bg-rose-100/70 border border-rose-200 px-3 py-1.5 rounded-lg">
+                      <span className="w-2.5 h-2.5 bg-rose-400 rounded-full shadow-[0_0_4px_#fb7185]"></span>
+                      <span className="text-[11px] font-bold text-rose-700">ต่ำกว่า 2.00: ต่ำกว่าเกณฑ์มาตรฐาน</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 📱 Mobile Input Form */}
+                <div className="md:hidden bg-indigo-50/40 border-2 border-indigo-200 rounded-[2rem] p-5 mb-6 shadow-sm overflow-hidden">
+                  <h4 className="font-black text-indigo-700 text-sm mb-4 flex items-center justify-between">
+                    <span>{editingAdsId ? '✏️ แก้ไขรายการบันทึก' : '➕ เพิ่มรายการใหม่'}</span>
+                    {editingAdsId && <button onClick={() => { setEditingAdsId(null); setAdsTrackForm({ date: new Date().toISOString().split('T')[0], record_time: new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }), topup_amount: '', balance_amount: '', sales_amount: '', is_new_live: false, note: '' }); }} className="text-[11px] text-rose-500 font-bold bg-rose-50 px-2 py-1 rounded-md">ยกเลิก</button>}
+                  </h4>
+                  
+                  <div className="grid grid-cols-2 gap-3 mb-4">
+                    <div className="col-span-2 flex gap-2">
+                      <div className="flex-1">
+                        <label className="text-[10px] font-bold text-slate-500 mb-1 block ml-1">วันที่</label>
+                        <input type="date" value={adsTrackForm.date || new Date().toISOString().split('T')[0]} onChange={e => setAdsTrackForm({...adsTrackForm, date: e.target.value})} className="block w-full box-border appearance-none bg-white rounded-xl p-3 font-black text-indigo-700 border border-slate-200 outline-none focus:border-indigo-400 shadow-sm" />
+                      </div>
+                      <div className="w-[120px]">
+                        <label className="text-[10px] font-bold text-slate-500 mb-1 block ml-1">เวลา</label>
+                        <input type="time" value={adsTrackForm.record_time} onChange={e => setAdsTrackForm({...adsTrackForm, record_time: e.target.value})} className="block w-full box-border appearance-none bg-white rounded-xl p-3 font-black text-indigo-700 border border-slate-200 outline-none focus:border-indigo-400 shadow-sm" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-blue-500 mb-1 block ml-1">เติมเงิน (+)</label>
+                      <input type="number" placeholder="0" value={adsTrackForm.topup_amount} onChange={e => setAdsTrackForm({...adsTrackForm, topup_amount: e.target.value})} className="block w-full box-border appearance-none bg-white rounded-xl p-3 font-black text-blue-600 border border-slate-200 outline-none focus:border-blue-400 shadow-sm" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-amber-500 mb-1 block ml-1">ยอดคงเหลือ</label>
+                      <input type="number" placeholder="0" value={adsTrackForm.balance_amount} onChange={e => setAdsTrackForm({...adsTrackForm, balance_amount: e.target.value})} className="block w-full box-border appearance-none bg-white rounded-xl p-3 font-black text-amber-600 border border-amber-200 outline-none focus:border-amber-400 shadow-inner" />
+                    </div>
+                    <div className="col-span-2">
+                      <div className="flex justify-between items-end mb-1 ml-1">
+                        <label className="text-[10px] font-bold text-slate-500">ยอดขาย</label>
+                        <label className="flex items-center gap-1.5 cursor-pointer bg-indigo-100/50 hover:bg-indigo-100 px-2 py-0.5 rounded text-indigo-700 border border-indigo-200 transition-colors">
+                          <input type="checkbox" checked={adsTrackForm.is_new_live || false} onChange={e => setAdsTrackForm({...adsTrackForm, is_new_live: e.target.checked})} className="rounded text-indigo-600 w-3.5 h-3.5 cursor-pointer" />
+                          <span className="text-[9px] font-black uppercase tracking-widest">🆕 เริ่มไลฟ์ใหม่</span>
+                        </label>
+                      </div>
+                      <input type="number" placeholder="0" value={adsTrackForm.sales_amount} onChange={e => setAdsTrackForm({...adsTrackForm, sales_amount: e.target.value})} className={`block w-full box-border appearance-none bg-white rounded-xl p-3 font-black text-slate-700 border ${adsTrackForm.is_new_live ? 'border-indigo-400 ring-2 ring-indigo-100 bg-indigo-50/20' : 'border-slate-200'} outline-none focus:border-indigo-400 shadow-sm transition-all`} />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-[10px] font-bold text-slate-400 mb-1 block ml-1">หมายเหตุ</label>
+                      <input type="text" placeholder="ระบุเหตุผล (ถ้ามี)..." value={adsTrackForm.note || ''} onChange={e => setAdsTrackForm({...adsTrackForm, note: e.target.value})} className="block w-full box-border appearance-none bg-white rounded-xl p-3 font-medium text-slate-600 text-xs border border-slate-200 outline-none focus:border-indigo-400 shadow-sm" />
+                    </div>
+                  </div>
+                  
+                  {(() => {
+                      const preview = previewAdsCalc();
+                      const isReady = adsTrackForm.balance_amount !== '' && adsTrackForm.sales_amount !== '';
+                      return (
+                         <div className="mt-2 pt-4 border-t border-indigo-100 mb-4">
+                            {adsTrackForm.is_new_live && (
+                              <div className="mb-3 bg-indigo-600 text-white p-2 rounded-lg text-center text-[10px] font-black uppercase tracking-widest shadow-md animate-pulse">
+                                🚀 คำนวณแบบไลฟ์ใหม่
+                              </div>
+                            )}
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="bg-purple-50 p-2.5 rounded-lg border border-purple-100 text-center"><p className="text-[9px] font-bold text-purple-500">ยอดรวมหลังเติมเงิน</p><p className="text-sm font-bold text-purple-600">{adsTrackForm.balance_amount !== '' ? `฿${preview.nextTotal.toLocaleString()}` : '-'}</p></div>
+                              <div className="bg-rose-50 p-2.5 rounded-lg border border-rose-100 text-center"><p className="text-[9px] font-bold text-rose-500">แอดกินไป (-)</p><p className="text-sm font-bold text-rose-500">{adsTrackForm.balance_amount !== '' ? `฿${preview.spend.toLocaleString()}` : '-'}</p></div>
+                              <div className={`p-2.5 rounded-lg border text-center ${adsTrackForm.is_new_live ? 'bg-indigo-50 border-indigo-200' : 'bg-emerald-50 border-emerald-100'}`}>
+                                <p className={`text-[9px] font-bold uppercase tracking-widest mb-1 ${adsTrackForm.is_new_live ? 'text-indigo-500' : 'text-emerald-500'}`}>ยอดสุทธิ</p>
+                                <p className={`text-sm font-bold ${adsTrackForm.is_new_live ? 'text-indigo-600' : 'text-emerald-600'}`}>{isReady ? `+฿${preview.increase.toLocaleString()}` : '-'}</p>
+                              </div>
+                              <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 text-center"><p className="text-[9px] font-bold text-slate-500">ROAS</p><p className={`text-sm font-bold tabular-nums ${isReady && preview.roas >= 4 ? 'text-emerald-500' : isReady && preview.roas >= 2 ? 'text-amber-500' : isReady ? 'text-rose-500' : 'text-slate-400'}`}>{isReady ? `${preview.roas.toFixed(2)}x` : '-'}</p></div>
+                            </div>
+                         </div>
+                      );
+                  })()}
+                  <button onClick={handleSaveAdsTrack} disabled={isSavingAdsTrack || adsTrackForm.balance_amount === '' || adsTrackForm.sales_amount === ''} className={`w-full py-3.5 rounded-xl font-bold text-sm text-white shadow-md active:scale-95 disabled:opacity-50 transition-all block box-border ${editingAdsId ? 'bg-amber-500' : 'bg-indigo-600 hover:bg-indigo-700'}`}>{isSavingAdsTrack ? '⏳ กำลังบันทึก...' : editingAdsId ? '💾 บันทึกการแก้ไข' : '💾 บันทึกรายการ'}</button>
+                </div>
+
+                {/* 📋 DATA SECTION */}
+                <div className="flex-1 overflow-hidden flex flex-col">
+                  
+                  {/* --- TABLE: Desktop View --- */}
+                  <div className="hidden md:block overflow-x-auto h-full custom-scrollbar pb-2">
+                    <table className="w-full text-left border-separate border-spacing-y-2 min-w-[1300px]">
+                      <thead className="text-[11px] font-bold text-slate-500 sticky top-0 bg-white/95 backdrop-blur-sm z-10 px-4 shadow-sm border-b border-slate-200">
+                        <tr>
+                          <th className="p-4 rounded-l-xl w-32">วัน / เวลา</th>
+                          <th className="p-4 text-center text-blue-500">เติมเงิน (+)</th>
+                          <th className="p-4 text-center text-amber-500">ยอดคงเหลือ</th>
+                          <th className="p-4 text-center text-purple-600 bg-purple-50/50">ยอดรวมหลังเติมเงิน</th>
+                          <th className="p-4 text-center text-rose-500 bg-rose-50/50 border-r border-white">แอดกินไป (-)</th>
+                          <th className="p-4 text-center text-slate-500">ยอดขาย</th>
+                          <th className="p-4 text-center text-emerald-600 bg-emerald-50/50 border-x border-white">ยอดสุทธิ</th>
+                          <th className="p-4 text-center text-slate-500">ROAS</th>
+                          <th className="p-4 text-center text-slate-400 w-40">หมายเหตุ</th>
+                          <th className="p-4 text-center rounded-r-xl text-slate-400 w-28">จัดการ</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {/* Desktop Input Row */}
+                        <tr className={`${editingAdsId ? 'bg-amber-50/60 border-amber-200' : 'bg-indigo-50/40 border-indigo-100'} border-2 rounded-xl shadow-inner group`}>
+                          <td className="p-2 rounded-l-xl align-middle">
+                            <div className="flex flex-col gap-1">
+                              {/* 🚀 ซ่อมวันที่หาย! ตอนนี้อ่านและโชว์จาก DB ถูกต้องแล้ว */}
+                              <input type="date" value={adsTrackForm.date || new Date().toISOString().split('T')[0]} onChange={e => setAdsTrackForm({...adsTrackForm, date: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg p-1.5 font-bold text-indigo-700 text-[10px] text-center outline-none focus:border-indigo-400 shadow-sm" />
+                              <input type="time" value={adsTrackForm.record_time} onChange={e => setAdsTrackForm({...adsTrackForm, record_time: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg p-1.5 font-black text-indigo-700 text-sm text-center outline-none focus:border-indigo-400 shadow-sm" />
+                            </div>
+                          </td>
+                          <td className="p-2 align-middle"><input type="number" placeholder="ยอดเติม..." value={adsTrackForm.topup_amount} onChange={e => setAdsTrackForm({...adsTrackForm, topup_amount: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg p-2 text-center font-black text-blue-600 outline-none focus:border-blue-400 shadow-sm" /></td>
+                          <td className="p-2 align-middle"><input type="number" placeholder="คงเหลือ..." value={adsTrackForm.balance_amount} onChange={e => setAdsTrackForm({...adsTrackForm, balance_amount: e.target.value})} className="w-full bg-white border-2 border-amber-200 rounded-lg p-2 text-center font-black text-amber-600 outline-none focus:border-amber-400 shadow-inner" /></td>
+                          {(() => {
+                            const preview = previewAdsCalc();
+                            const isReady = adsTrackForm.balance_amount !== '' && adsTrackForm.sales_amount !== '';
+                            return (
+                              <>
+                                <td className="p-2 text-center bg-purple-50/50 rounded-lg align-middle"><div className="py-2 font-black text-purple-600 text-lg">{adsTrackForm.balance_amount !== '' ? `฿${preview.nextTotal.toLocaleString()}` : '-'}</div></td>
+                                <td className="p-2 text-center align-middle"><div className="bg-rose-50 border border-rose-100 py-1.5 rounded-lg font-black text-rose-500 text-lg">{adsTrackForm.balance_amount !== '' ? `฿${preview.spend.toLocaleString()}` : '-'}</div></td>
+                                <td className="p-2 align-middle">
+                                  <div className="flex justify-center mb-1">
+                                    <label className="flex items-center gap-1.5 cursor-pointer bg-indigo-100/50 hover:bg-indigo-100 px-2 py-0.5 rounded text-indigo-700 border border-indigo-200 transition-colors">
+                                      <input type="checkbox" checked={adsTrackForm.is_new_live || false} onChange={e => setAdsTrackForm({...adsTrackForm, is_new_live: e.target.checked})} className="rounded text-indigo-600 w-3 h-3 cursor-pointer" />
+                                      <span className="text-[9px] font-black uppercase tracking-widest">🆕 เริ่มไลฟ์ใหม่</span>
+                                    </label>
+                                  </div>
+                                  <input type="number" placeholder="ยอดขาย..." value={adsTrackForm.sales_amount} onChange={e => setAdsTrackForm({...adsTrackForm, sales_amount: e.target.value})} className={`w-full bg-white border ${adsTrackForm.is_new_live ? 'border-indigo-400 ring-2 ring-indigo-200 bg-indigo-50/20' : 'border-emerald-200'} rounded-lg p-2 text-center font-black text-slate-700 outline-none focus:border-emerald-400 shadow-inner transition-all`} />
+                                </td>
+                                <td className={`p-2 text-center rounded-lg align-middle ${adsTrackForm.is_new_live ? 'bg-indigo-50/50' : 'bg-emerald-50/50'}`}><div className={`py-2 font-black text-lg ${adsTrackForm.is_new_live ? 'text-indigo-600' : 'text-emerald-600'}`}>{isReady ? `+฿${preview.increase.toLocaleString()}` : '-'}</div></td>
+                                <td className="p-2 text-center align-middle"><div className={`py-1.5 px-3 rounded-lg font-black text-xs inline-block ${isReady && preview.roas >= 4 ? 'bg-emerald-500 text-white shadow-md' : isReady && preview.roas >= 2 ? 'bg-amber-400 text-amber-950 shadow-md' : isReady ? 'bg-rose-500 text-white shadow-md' : 'bg-slate-200 text-slate-400'}`}>{isReady ? `${preview.roas.toFixed(2)}x` : '-'}</div></td>
+                              </>
+                            );
+                          })()}
+                          <td className="p-2 align-middle"><input type="text" placeholder="ระบุ..." value={adsTrackForm.note || ''} onChange={e => setAdsTrackForm({...adsTrackForm, note: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg p-2 font-bold text-xs text-slate-600 outline-none focus:border-indigo-400 shadow-sm" /></td>
+                          <td className="p-2 text-center rounded-r-xl align-middle">
+                            <button onClick={handleSaveAdsTrack} disabled={isSavingAdsTrack || adsTrackForm.balance_amount === '' || adsTrackForm.sales_amount === ''} className={`w-full py-2.5 rounded-lg font-black text-[11px] text-white active:scale-95 disabled:opacity-50 transition-all ${editingAdsId ? 'bg-amber-500' : 'bg-indigo-600 hover:bg-indigo-700 shadow-sm'}`}>{isSavingAdsTrack ? '⏳' : editingAdsId ? 'บันทึกแก้' : '💾 บันทึก'}</button>
+                          </td>
+                        </tr>
+                        
+                        {/* Data Rows */}
+                        {dynamicAdsData.map((item) => {
+                          return (
+                            <tr key={item.id} className={`transition-colors border-b border-slate-100 ${editingAdsId === item.id ? 'opacity-40 pointer-events-none' : item.is_new_live ? 'bg-indigo-50/40 hover:bg-indigo-100/50' : 'bg-white hover:bg-slate-50'}`}>
+                              <td className="p-4 font-black text-slate-700 rounded-l-xl text-center">
+                                {/* 🚀 แก้ไขวันที่ตรงนี้! ดึงจาก item.record_date */}
+                                <div className="text-[10px] text-slate-500 font-bold mb-0.5">
+                                  {item.record_date ? new Date(item.record_date).toLocaleDateString('th-TH', {day: '2-digit', month: 'short', year: '2-digit'}) : '-'}
+                                </div>
+                                <div className="text-sm">{item.record_time.slice(0,5)} น.</div>
+                                <span className="block text-[8px] text-slate-400 font-bold mt-1 uppercase">{item.employees?.nickname || 'ADMIN'}</span>
+                              </td>
+                              <td className="p-4 text-center font-bold text-blue-500">{Number(item.topup_amount) > 0 ? `+฿${Number(item.topup_amount).toLocaleString()}` : '-'}</td>
+                              <td className="p-4 text-center font-black text-amber-500">฿{Number(item.balance_amount).toLocaleString()}</td>
+                              <td className="p-4 text-center font-black text-purple-600 bg-purple-50/30">฿{item._dynamic.nextTotal.toLocaleString()}</td>
+                              <td className="p-4 text-center font-black text-rose-500 bg-rose-50/30">{item._dynamic.spend > 0 ? `฿${item._dynamic.spend.toLocaleString()}` : '฿0'}</td>
+                              <td className="p-4 text-center font-black text-slate-700">
+                                <div className="text-base">฿{Number(item.sales_amount).toLocaleString()}</div>
+                                {item.is_new_live && (
+                                  <div className="mt-1.5">
+                                    <span className="bg-indigo-600 text-white px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest shadow-sm">🚀 ไลฟ์ใหม่</span>
+                                  </div>
+                                )}
+                              </td>
+                              <td className={`p-4 text-center font-black ${item.is_new_live ? 'text-indigo-600 bg-indigo-50/60' : 'text-emerald-600 bg-emerald-50/30'}`}>{item._dynamic.increase > 0 ? `+฿${item._dynamic.increase.toLocaleString()}` : '฿0'}</td>
+                              <td className="p-4 text-center">
+                                <div className={`inline-block px-3 py-1 rounded-lg font-black text-xs ${item._dynamic.roas >= 4 ? 'bg-emerald-500 text-white shadow-sm' : item._dynamic.roas >= 2 ? 'bg-amber-400 text-amber-950 shadow-sm' : item._dynamic.roas > 0 ? 'bg-rose-500 text-white shadow-sm' : 'bg-slate-200 text-slate-400'}`}>
+                                  {item._dynamic.roas > 0 ? `${item._dynamic.roas.toFixed(2)}x` : '-'}
+                                </div>
+                              </td>
+                              <td className="p-4 text-center text-[11px] text-slate-500 truncate max-w-[150px]">{item.note || '-'}</td>
+                              <td className="p-4 text-center rounded-r-xl">
+                                <div className="flex gap-2 justify-center">
+                                  <button onClick={() => { setEditingAdsId(item.id); setAdsTrackForm({ date: item.record_date || new Date().toISOString().split('T')[0], record_time: item.record_time.slice(0,5), topup_amount: item.topup_amount || '', balance_amount: item.balance_amount || '', sales_amount: item.sales_amount || '', is_new_live: item.is_new_live || false, note: item.note || '' }); window.scrollTo({top: 0, behavior: 'smooth'}); }} className="p-2 bg-amber-50 text-amber-600 rounded-md hover:bg-amber-100 transition-colors shadow-sm">✏️</button>
+                                  <button onClick={() => handleDeleteAdsTrack(item.id)} className="p-2 bg-rose-50 text-rose-500 rounded-md hover:bg-rose-100 transition-colors shadow-sm">🗑️</button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* --- CARD LIST: Mobile View --- */}
+                  <div className="md:hidden space-y-4 h-full overflow-y-auto custom-scrollbar pb-10">
+                    {dynamicAdsData.length === 0 ? (
+                      <div className="py-10 text-center text-slate-400 font-bold uppercase tracking-widest text-[12px] italic">-- ยังไม่มีข้อมูลบันทึกของช่องทางนี้ --</div>
+                    ) : (
+                      dynamicAdsData.map((item) => {
+                        return (
+                          <div key={item.id} className={`bg-white rounded-[1.5rem] p-4 border shadow-md ${editingAdsId === item.id ? 'ring-4 ring-amber-400 opacity-50 border-transparent' : item.is_new_live ? 'border-indigo-300 bg-indigo-50/30' : 'border-slate-100'}`}>
+                            <div className="flex justify-between items-start mb-3 border-b border-slate-50 pb-3">
+                               <div className="flex flex-col">
+                                 <div className="flex items-center gap-2">
+                                   <div className="bg-slate-800 text-white px-3 py-1 rounded-lg text-xs font-black">{item.record_time.slice(0,5)} น.</div>
+                                   {/* 🚀 แก้ไขวันที่ในมือถือด้วย */}
+                                   <div className="text-[10px] font-bold text-slate-500">{item.record_date ? new Date(item.record_date).toLocaleDateString('th-TH', {day: '2-digit', month: 'short'}) : ''}</div>
+                                 </div>
+                                 <span className="text-[9px] text-slate-400 font-bold uppercase mt-1.5 tracking-widest ml-1">โดย: {item.employees?.nickname || 'ADMIN'}</span>
+                               </div>
+                               <div className="flex gap-2">
+                                  <button onClick={() => { setEditingAdsId(item.id); setAdsTrackForm({ date: item.record_date || new Date().toISOString().split('T')[0], record_time: item.record_time.slice(0,5), topup_amount: item.topup_amount || '', balance_amount: item.balance_amount || '', sales_amount: item.sales_amount || '', is_new_live: item.is_new_live || false, note: item.note || '' }); window.scrollTo({top: 0, behavior: 'smooth'}); }} className="w-8 h-8 flex items-center justify-center bg-amber-50 text-amber-600 rounded-xl shadow-sm">✏️</button>
+                                  <button onClick={() => handleDeleteAdsTrack(item.id)} className="w-8 h-8 flex items-center justify-center bg-rose-50 text-rose-500 rounded-xl shadow-sm">🗑️</button>
+                               </div>
+                            </div>
+
+                            {item.is_new_live && (
+                              <div className="mb-3 bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-center shadow-sm">🚀 เริ่มไลฟ์ใหม่</div>
+                            )}
+
+                            <div className="grid grid-cols-2 gap-2">
+                               <div className="bg-slate-50 p-2.5 rounded-xl text-center border border-slate-100"><p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">คงเหลือ (เติม)</p><p className="text-[13px] font-black text-amber-500 tabular-nums">฿{Number(item.balance_amount).toLocaleString()} <span className="text-blue-500">{Number(item.topup_amount) > 0 ? `(+${Number(item.topup_amount).toLocaleString()})` : ''}</span></p></div>
+                               <div className="bg-purple-50/50 p-2.5 rounded-xl text-center border border-purple-100"><p className="text-[9px] font-black text-purple-400 uppercase tracking-widest mb-1">ทุนรวมในพอร์ต</p><p className="text-[13px] font-black text-purple-600 tabular-nums">฿{item._dynamic.nextTotal.toLocaleString()}</p></div>
+                               <div className="bg-rose-50 p-2.5 rounded-xl text-center border border-rose-100"><p className="text-[9px] font-black text-rose-400 uppercase tracking-widest mb-1">แอดกินไป (-)</p><p className="text-[13px] font-black text-rose-500 tabular-nums">฿{item._dynamic.spend.toLocaleString()}</p></div>
+                               <div className={`${item.is_new_live ? 'bg-indigo-50 border-indigo-200' : 'bg-emerald-50 border-emerald-100'} p-2.5 rounded-xl text-center border`}><p className={`text-[9px] font-black uppercase tracking-widest mb-1 ${item.is_new_live ? 'text-indigo-500' : 'text-emerald-400'}`}>ยอดขายเพิ่มสุทธิ</p><p className={`text-[13px] font-black tabular-nums ${item.is_new_live ? 'text-indigo-600' : 'text-emerald-600'}`}>+฿{item._dynamic.increase.toLocaleString()}</p></div>
+                            </div>
+                            
+                            <div className="mt-3 flex justify-between items-center bg-slate-900 p-3.5 rounded-xl shadow-inner">
+                               <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] px-1">Efficiency ROAS</span>
+                               <span className={`text-sm font-black tabular-nums px-2 ${item._dynamic.roas >= 4 ? 'text-emerald-400' : item._dynamic.roas >= 2 ? 'text-amber-400' : item._dynamic.roas > 0 ? 'text-rose-400' : 'text-slate-500'}`}>
+                                  {item._dynamic.roas > 0 ? `${item._dynamic.roas.toFixed(2)}x` : '-'}
+                               </span>
+                            </div>
+
+                            {item.note && <div className="mt-3 text-[11px] text-slate-500 font-bold px-2 italic">📝 {item.note}</div>}
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+
+{/* ========================================================================= */}
+      {/* ⭐️ VIEW: KPI MANAGER (ส่วนของ Admin - อัปเกรด: บันทึกแยกทีละบุคคล) */}
       {/* ========================================================================= */}
       {currentView === "kpi_manager" && (user?.role === 'admin' || user?.role === 'ceo') && (
         <div className="px-4 md:px-8 pb-8 z-10 flex-1 flex flex-col w-full mt-4 animate-fade-in">
           <div className="bg-white/80 backdrop-blur-xl rounded-[2rem] p-6 md:p-8 shadow-sm border border-white flex-1 flex flex-col relative overflow-hidden">
             
-            {/* Header */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8 border-b border-slate-100 pb-6">
               <div>
                 <h3 className="font-black text-slate-800 text-xl md:text-2xl flex items-center gap-3">
                   <span className="p-2 bg-amber-100 text-amber-600 rounded-xl shadow-inner text-2xl">⭐️</span> 
                   ประเมินผลงาน KPI
                 </h3>
-                <p className="text-[10px] md:text-xs text-slate-500 font-bold mt-2 ml-1 italic text-amber-600">✨ ระบบแยกเกณฑ์ยอดขายเฉพาะสายไลฟ์อัตโนมัติ</p>
+                <p className="text-[10px] md:text-xs text-slate-500 font-bold mt-2 ml-1 italic text-amber-600">✨ ระบบบันทึกรายบุคคล | ประเมินเสร็จกดเซฟทีละคนได้เลย</p>
               </div>
               
               <div className="flex items-center gap-3">
                 <input 
                   type="month" 
-                  value={kpiMonth} 
+                  value={kpiMonth || ''} 
                   onChange={(e) => setKpiMonth(e.target.value)}
                   className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 font-black text-sm outline-none focus:border-amber-400 shadow-inner"
                 />
-                <button 
-                  onClick={async () => {
-                    Swal.fire({ title: 'กำลังบันทึก...', didOpen: () => Swal.showLoading() });
-                    try {
-                      await supabase.from('system_settings').upsert([{ setting_key: 'performance_reviews', setting_value: JSON.stringify(performanceReviews) }], { onConflict: 'setting_key' });
-                      Swal.fire({ icon: 'success', title: 'บันทึกสำเร็จ', timer: 1500, showConfirmButton: false });
-                    } catch (e) { Swal.fire('Error', e.message, 'error'); }
-                  }}
-                  className="bg-slate-800 text-white px-6 py-2.5 rounded-xl font-black text-xs shadow-lg hover:bg-black transition-all"
-                >
-                  💾 บันทึกเกรดทั้งหมด
-                </button>
+                {/* ❌ เอาปุ่ม "บันทึกทั้งหมด" ตรงนี้ออกไปแล้วครับ */}
               </div>
             </div>
 
-            {/* รายการพนักงาน */}
             <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-4">
-              {allSalesData.map((emp) => {
-                // 🔍 ระบุประเภทพนักงาน
-                const isLiveTeam = emp.employees?.position?.includes('ไลฟ์') || emp.employees?.position?.toLowerCase().includes('live');
+              {[...(allSalesData || [])]
+                .filter(emp => emp?.employees?.is_active !== false && String(emp?.employees?.is_active || '').toLowerCase() !== 'false')
+                .sort((a, b) => String(a?.employees?.employee_code || "").localeCompare(String(b?.employees?.employee_code || ""), undefined, { numeric: true }))
+                .map((emp) => {
                 
-                // 🧠 AI Logic: คำนวณสถิติ
-                const empSales = emp.current_sales || 0;
-                const empTarget = emp.target_sales || 1;
-                const salesPercent = (empSales / empTarget) * 100;
+                const safeKpiMonth = kpiMonth || new Date().toISOString().slice(0, 7);
+                const positionName = String(emp?.employees?.position || '').toLowerCase();
+                const isLiveTeam = positionName.includes('ไลฟ์') || positionName.includes('live');
+                const empSales = emp?.current_sales || 0;
+                const empTarget = emp?.target_sales || 1;
+                const salesPercent = empTarget > 0 ? (empSales / empTarget) * 100 : 0;
                 
-                const lateCount = attendanceList.filter(a => a.employee_id === emp.employee_id && a.status === 'late' && a.date.startsWith(kpiMonth)).length;
-                const leaveCount = allEmpLeaves.filter(l => l.employee_id === emp.employee_id && l.status === 'อนุมัติ' && l.start_date.startsWith(kpiMonth)).length;
+                const lateCount = (attendanceList || []).filter(a => a?.employee_id === emp?.employee_id && a?.status === 'late' && String(a?.date || '').startsWith(safeKpiMonth)).length;
+                const leaveCount = (allEmpLeaves || []).filter(l => l?.employee_id === emp?.employee_id && l?.status === 'อนุมัติ' && String(l?.start_date || '').startsWith(safeKpiMonth) && !String(l?.leave_type || '').includes('หยุด')).length;
 
-                // 🧮 สูตรคำนวณคะแนน (แยกประเภท)
-                let score = isLiveTeam ? 70 : 90; // สายออฟฟิศเริ่มที่ 90 เพราะไม่มีแต้มยอดขาย
-                if (isLiveTeam) {
-                  score += (salesPercent >= 100 ? 20 : (salesPercent / 100) * 20); // สายไลฟ์บวกยอดขายได้ 20 คะแนน
-                } else {
-                  score += 10; // สายออฟฟิศให้คะแนนฐานเพิ่มอีก 10 เพื่อให้เต็ม 100
-                }
-                
-                score -= (lateCount * 3); // สายลบหนักหน่อย ครั้งละ 3
-                score -= (leaveCount * 1); // ลาครั้งละ 1
+                let score = isLiveTeam ? (80 + (salesPercent >= 100 ? 20 : (salesPercent / 100) * 20)) : 100 - (lateCount * 3);
+                score -= (leaveCount * 1);
                 const finalScore = Math.max(0, Math.min(100, score)).toFixed(0);
 
-                const review = performanceReviews[`${emp.employee_id}_${kpiMonth}`] || { grade: '-', comment: '' };
+                const getAutoGrade = (s) => {
+                  const num = Number(s);
+                  if (num >= 95) return 'A+'; if (num >= 85) return 'A'; if (num >= 75) return 'B+';
+                  if (num >= 65) return 'B'; if (num >= 55) return 'C'; if (num >= 50) return 'D';
+                  return 'F';
+                };
+
+                const reviewKey = `${emp?.employee_id}_${safeKpiMonth}`;
+                const review = performanceReviews[reviewKey] || { grade: getAutoGrade(finalScore), comment: '', score: finalScore };
 
                 return (
-                  <div key={emp.employee_id} className={`bg-white border border-slate-100 rounded-[1.5rem] p-5 shadow-sm hover:shadow-md transition-all group border-l-8 ${isLiveTeam ? 'border-l-purple-400' : 'border-l-indigo-400'}`}>
+                  <div key={emp?.employee_id} className={`bg-white border border-slate-100 rounded-[1.5rem] p-5 shadow-sm hover:shadow-md transition-all group border-l-8 ${isLiveTeam ? 'border-l-purple-400' : 'border-l-indigo-400'}`}>
                     <div className="flex flex-col lg:flex-row gap-6">
                       
-                      {/* ข้อมูลพนักงาน */}
                       <div className="lg:w-1/4">
                         <div className="flex items-center gap-2 mb-1">
-                          <span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase ${isLiveTeam ? 'bg-purple-100 text-purple-600' : 'bg-indigo-100 text-indigo-600'}`}>
-                            {isLiveTeam ? 'Live Performance' : 'Office Discipline'}
-                          </span>
+                          <span className={`text-[8px] font-black px-1.5 py-0.5 rounded uppercase ${isLiveTeam ? 'bg-purple-100 text-purple-600' : 'bg-indigo-100 text-indigo-600'}`}>{isLiveTeam ? 'Live' : 'Office'}</span>
+                          <span className="text-[8px] font-black px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">ID: {emp?.employees?.employee_code || '-'}</span>
                         </div>
-                        <p className="font-black text-slate-800 text-lg">{emp.employees?.full_name}</p>
-                        <p className="text-[10px] text-slate-400 font-bold uppercase mb-3">{emp.employees?.employee_code} | {emp.employees?.position}</p>
+                        <p className="font-black text-slate-800 text-lg">{emp?.employees?.full_name || 'ไม่ทราบชื่อ'}</p>
+                        <p className="text-[10px] text-slate-400 font-bold uppercase mb-3">{emp?.employees?.position || 'ไม่ระบุตำแหน่ง'}</p>
                         <div className="flex items-center gap-2">
-                          <span className={`text-[20px] font-black ${Number(finalScore) >= 80 ? 'text-emerald-500' : Number(finalScore) >= 60 ? 'text-amber-500' : 'text-rose-500'}`}>
-                            {finalScore}%
-                          </span>
+                          <span className={`text-[20px] font-black ${Number(finalScore) >= 80 ? 'text-emerald-500' : Number(finalScore) >= 60 ? 'text-amber-500' : 'text-rose-500'}`}>{finalScore}%</span>
                           <span className="text-[9px] font-bold text-slate-400">Score</span>
                         </div>
                       </div>
 
-                      {/* สถิติจริง (สลับตามประเภท) */}
                       <div className="lg:w-1/3 grid grid-cols-3 gap-2 border-x border-slate-50 px-6">
-                        <div className="text-center flex flex-col justify-center">
-                          <p className="text-[9px] font-bold text-slate-400 uppercase">ยอดขาย</p>
-                          {isLiveTeam ? (
-                            <p className={`text-sm font-black ${salesPercent >= 100 ? 'text-emerald-600' : 'text-slate-700'}`}>{salesPercent.toFixed(0)}%</p>
-                          ) : (
-                            <p className="text-[10px] font-bold text-slate-300 italic">ไม่คิดผลงาน</p>
-                          )}
-                        </div>
-                        <div className="text-center flex flex-col justify-center">
-                          <p className="text-[9px] font-bold text-slate-400 uppercase">มาสาย</p>
-                          <p className={`text-sm font-black ${lateCount > 2 ? 'text-rose-600' : 'text-slate-700'}`}>{lateCount} ครั้ง</p>
-                        </div>
-                        <div className="text-center flex flex-col justify-center">
-                          <p className="text-[9px] font-bold text-slate-400 uppercase">ลางาน</p>
-                          <p className="text-sm font-black text-slate-700">{leaveCount} วัน</p>
-                        </div>
+                        <div className="text-center flex flex-col justify-center"><p className="text-[9px] font-bold text-slate-400 uppercase">ยอดขาย</p><p className="text-sm font-black">{isLiveTeam ? `${salesPercent.toFixed(0)}%` : '-'}</p></div>
+                        <div className="text-center flex flex-col justify-center"><p className="text-[9px] font-bold text-slate-400 uppercase">มาสาย</p><p className="text-sm font-black">{isLiveTeam ? 'ไม่คิด' : `${lateCount} ครั้ง`}</p></div>
+                        <div className="text-center flex flex-col justify-center"><p className="text-[9px] font-bold text-slate-400 uppercase">ลางาน</p><p className="text-sm font-black">{leaveCount} วัน</p></div>
                       </div>
 
-                      {/* เกรดและคอมเมนต์ */}
-                      <div className="flex-1 flex flex-col sm:flex-row gap-4 items-center">
-                        <div className="w-full sm:w-24 text-center">
+                      <div className="flex-1 flex flex-col sm:flex-row gap-4 items-end">
+                        <div className="w-full sm:w-24">
                           <label className="block text-[9px] font-bold text-slate-400 mb-1">เกรด</label>
-                          <select 
-                            value={review.grade}
-                            onChange={(e) => {
-                              const newReviews = { ...performanceReviews };
-                              newReviews[`${emp.employee_id}_${kpiMonth}`] = { ...review, grade: e.target.value };
-                              setPerformanceReviews(newReviews);
-                            }}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-black text-center text-amber-600 outline-none"
-                          >
-                            {['-', 'A+', 'A', 'B+', 'B', 'C', 'D', 'F'].map(g => <option key={g} value={g}>{g}</option>)}
-                          </select>
+                          <select value={review.grade} onChange={(e) => {
+                            const n = { ...(performanceReviews || {}) }; 
+                            n[reviewKey] = { ...review, grade: e.target.value, score: finalScore }; 
+                            setPerformanceReviews(n);
+                          }} className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-black text-amber-600 outline-none h-[38px]">{['-', 'A+', 'A', 'B+', 'B', 'C', 'D', 'F'].map(g => <option key={g} value={g}>{g}</option>)}</select>
                         </div>
                         <div className="flex-1 w-full">
                           <label className="block text-[9px] font-bold text-slate-400 mb-1">ความเห็นผู้บริหาร</label>
-                          <input 
-                            type="text"
-                            placeholder="พิมพ์ข้อควรปรับปรุง..."
-                            value={review.comment}
-                            onChange={(e) => {
-                              const newReviews = { ...performanceReviews };
-                              newReviews[`${emp.employee_id}_${kpiMonth}`] = { ...review, comment: e.target.value };
-                              setPerformanceReviews(newReviews);
-                            }}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-bold outline-none focus:bg-white focus:border-amber-400 shadow-inner"
-                          />
+                          <input type="text" placeholder="พิมพ์ข้อความ..." value={review.comment} onChange={(e) => {
+                            const n = { ...(performanceReviews || {}) }; 
+                            n[reviewKey] = { ...review, comment: e.target.value, score: finalScore }; 
+                            setPerformanceReviews(n);
+                          }} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold outline-none h-[38px]" />
                         </div>
-                      </div>
+                        
+                        {/* 🚀 กรุ๊ปปุ่ม จัดการรายบุคคล (เซฟ / ลบ) */}
+                        <div className="flex items-center gap-2">
+                          {/* ปุ่มเซฟรายบุคคล */}
+                          <button onClick={async () => {
+                            if (review.grade === '-') {
+                              Swal.fire('แจ้งเตือน', 'กรุณาระบุเกรดก่อนกดบันทึก หากต้องการยกเลิกให้กดปุ่มถังขยะแทนครับ', 'warning');
+                              return;
+                            }
+                            
+                            Swal.fire({ title: 'กำลังบันทึก...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+                            try {
+                              await supabase.from('employee_kpi').upsert({
+                                employee_id: emp.employee_id,
+                                month: safeKpiMonth,
+                                score: finalScore,
+                                grade: review.grade,
+                                comment: review.comment || ''
+                              }, { onConflict: 'employee_id, month' });
+                              
+                              Swal.fire('บันทึกสำเร็จ!', `อัปเดตผลประเมินของ ${emp?.employees?.full_name} แล้ว`, 'success');
+                            } catch (error) {
+                              Swal.fire('Error', 'บันทึกไม่สำเร็จ: ' + error.message, 'error');
+                            }
+                          }} className="h-[38px] px-4 flex items-center justify-center bg-emerald-50 text-emerald-600 font-bold text-xs rounded-lg border border-emerald-100 hover:bg-emerald-500 hover:text-white transition-all shadow-sm">
+                            💾 บันทึก
+                          </button>
 
+                          {/* ปุ่มลบรายบุคคล */}
+                          <button onClick={async () => {
+                            const result = await Swal.fire({ title: 'ลบผลประเมิน?', text: `ต้องการล้างข้อมูลของ ${emp?.employees?.full_name}?`, icon: 'warning', showCancelButton: true, confirmButtonText: 'ลบเลย!', confirmButtonColor: '#ef4444' });
+                            if (result.isConfirmed) {
+                              Swal.fire({ title: 'กำลังลบข้อมูล...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+                              try {
+                                await supabase.from('employee_kpi').delete().match({ employee_id: emp.employee_id, month: safeKpiMonth });
+                                
+                                const n = { ...(performanceReviews || {}) };
+                                n[reviewKey] = { grade: '-', comment: '', score: finalScore }; 
+                                setPerformanceReviews(n);
+                                
+                                Swal.fire('ลบแล้ว!', 'ข้อมูลถูกลบออกจากระบบอย่างถาวร', 'success');
+                              } catch (error) {
+                                Swal.fire('Error', 'ลบไม่สำเร็จ: ' + error.message, 'error');
+                              }
+                            }
+                          }} className="h-[38px] w-[38px] flex items-center justify-center bg-rose-50 text-rose-500 rounded-lg border border-rose-100 hover:bg-rose-500 hover:text-white transition-all shadow-sm">
+                            🗑️
+                          </button>
+                        </div>
+
+                      </div>
                     </div>
                   </div>
                 );
@@ -8483,7 +9368,60 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
             </div>
           </div>
         </div>
-      )} 
+      )}
+
+
+      {/* ========================================================================= */}
+      {/* 🎖️ VIEW: KPI EMPLOYEE (ส่วนของพนักงาน - โชว์เกรดตัวเองแบบแม่นยำ) */}
+      {/* ========================================================================= */}
+      {currentView === "kpi_manager" && user?.role !== 'admin' && user?.role !== 'ceo' && (
+        <div className="px-4 md:px-8 pb-8 z-10 flex-1 flex flex-col w-full mt-4 animate-fade-in">
+          <div className="bg-white rounded-[2rem] p-6 md:p-8 shadow-sm border border-slate-100 relative overflow-hidden flex-1">
+            <div className="absolute top-0 right-0 w-48 h-48 bg-amber-500/10 rounded-full blur-3xl"></div>
+            
+            <div className="flex items-center gap-4 mb-8">
+              <div className="p-4 bg-amber-100 text-amber-600 rounded-[1.5rem] text-3xl shadow-inner">🏆</div>
+              <div><h3 className="font-black text-slate-800 text-2xl">ผลประเมินการทำงาน</h3><p className="text-sm text-slate-400 font-bold uppercase tracking-widest mt-1">Performance Review Result</p></div>
+            </div>
+
+            {(() => {
+              const targetMonth = kpiMonth || new Date().toISOString().slice(0, 7); 
+              const myResult = (performanceReviews || {})[`${user?.id}_${targetMonth}`];
+
+              // ถ้าไม่มีข้อมูล หรือเกรดเป็น '-' พนักงานจะเห็นหน้าว่างทันที (ไม่เด้งผีหลอก)
+              if (!myResult || myResult.grade === '-' || myResult.grade === undefined) {
+                return (
+                  <div className="bg-slate-50 border-2 border-dashed border-slate-200 p-12 rounded-[2rem] text-center max-w-2xl mx-auto mt-10">
+                    <span className="text-6xl block mb-4 grayscale opacity-50">⏳</span>
+                    <h4 className="text-slate-600 font-black text-lg mb-2">ยังไม่มีผลประเมินในรอบเดือนนี้</h4>
+                    <p className="text-slate-400 font-bold text-sm">ผู้บริหารอาจกำลังปรับปรุงข้อมูล หรือยังไม่ได้ประกาศผลครับ</p>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="max-w-4xl mx-auto mt-4 animate-fade-in">
+                  <div className="mb-6 inline-flex items-center gap-2 bg-amber-50 border border-amber-100 px-4 py-2 rounded-2xl">
+                    <span className="text-[11px] font-black text-amber-700 uppercase">รอบเดือน: {targetMonth}</span>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
+                    <div className="text-center md:text-left bg-gradient-to-br from-amber-500 to-orange-600 p-8 rounded-[2.5rem] text-white shadow-xl flex flex-col justify-center items-center md:items-start h-full relative overflow-hidden">
+                      <p className="text-xs font-black uppercase opacity-80 mb-2">Your Grade</p>
+                      <h2 className="text-8xl font-black leading-none mb-4">{myResult.grade || '-'}</h2>
+                      <div className="bg-white/20 backdrop-blur-md px-5 py-2 rounded-2xl border border-white/30 text-xl font-black">Score: {myResult.score || 0}%</div>
+                    </div>
+                    <div className="md:col-span-2 flex flex-col h-full bg-slate-50 p-6 md:p-10 rounded-[2.5rem] border border-slate-100 shadow-inner">
+                      <label className="text-[10px] font-black text-slate-400 uppercase mb-3 ml-2 tracking-widest">💌 Message from Management</label>
+                      <p className="text-slate-700 font-bold text-lg md:text-2xl italic leading-relaxed">"{myResult.comment || 'รักษามาตรฐานการทำงานที่ดีต่อไปครับ!'}"</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
 
 
 {/* ========================================================================= */}
@@ -8496,12 +9434,21 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
               <div className="mb-6 border-b border-slate-100 pb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 shrink-0">
                 <div>
                   <h3 className="font-black text-slate-800 text-xl flex items-center gap-2">💎 จัดการยอดขายพนักงาน</h3>
-                  <p className="text-sm text-slate-500 font-medium mt-1">อัปเดตยอดขายและเป้าหมายของทีม (เรียงตามรหัสพนักงาน)</p>
+                  <p className="text-sm text-slate-500 font-medium mt-1">อัปเดตยอดขายและเป้าหมายของทีม (ตารางรูปแบบแยกกระเป๋าคอมมิชชัน)</p>
                 </div>
               </div>
 
               {/* 🧠 กรองข้อมูล และ เรียงลำดับตามรหัสพนักงาน (PL001 ขึ้นก่อน) */} 
                 {(() => { 
+                  // 🚀 1. คำนวณรอบบิล (26-25) อิงตามเดือนปัจจุบัน
+                  const today = new Date();
+                  let sY = today.getFullYear(), sM = today.getMonth() + 1, eY = sY, eM = sM;
+                  if (today.getDate() >= 26) { eM += 1; if(eM > 12){ eM = 1; eY += 1; } }
+                  else { sM -= 1; if(sM < 1){ sM = 12; sY -= 1; } }
+                  const pad = n => String(n).padStart(2, '0');
+                  const cycleStart = `${sY}-${pad(sM)}-26`;
+                  const cycleEnd = `${eY}-${pad(eM)}-25`;
+
                   const salesStaffOnly = (allSalesData || [])
                     .filter(sale => { 
                       const pos = (sale.employees?.position || '').toLowerCase(); 
@@ -8517,12 +9464,6 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                       const codeB = b.employees?.employee_code || "";
                       return codeA.localeCompare(codeB, undefined, { numeric: true, sensitivity: 'base' });
                     });
-
-                  const calculateCommission = (sale, empId) => {
-                    const sales = Number(sale.current_sales || 0);
-                    const normalRate = Number(sale.commission_rate || 0);
-                    return sales * (normalRate / 100);
-                  };
 
                 return (
                   <>
@@ -8581,7 +9522,7 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                       </div>
                     </div>
 
-                  {/* 📊 2. ตารางแสดงยอดขาย */}
+                  {/* 📊 2. ตารางแสดงยอดขาย (New Bucket Design) */}
                     <div className="flex flex-col flex-1 h-full w-full">
                       <div className="flex-1 overflow-x-auto overflow-y-auto w-full custom-scrollbar pr-2 mb-4">
                         {salesStaffOnly.length === 0 ? (
@@ -8590,17 +9531,14 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                             <p className="font-bold text-slate-400 uppercase tracking-widest text-sm">ไม่พบข้อมูลพนักงาน</p>
                           </div>
                         ) : (
-                          <table className="w-full text-left border-separate border-spacing-y-2 min-w-[1100px]">
-                            <thead className="text-[11px] md:text-xs text-slate-400 uppercase bg-slate-50 sticky top-0 z-10 shadow-sm">
+                          <table className="w-full text-left border-separate border-spacing-y-3 min-w-[1200px]">
+                            <thead className="text-[11px] md:text-xs text-slate-500 uppercase bg-slate-100 sticky top-0 z-10 shadow-sm border-b border-slate-200">
                               <tr>
-                                <th className="p-4 rounded-l-xl">พนักงาน (รหัส)</th>
-                                <th className="p-4 text-center">ยอดปัจจุบัน (฿)</th>
-                                <th className="p-4 text-center text-indigo-500">เป้าหมาย (฿)</th>
-                                <th className="p-4 text-center text-rose-500">เรทปกติ (%)</th>
-                                <th className="p-4 text-center text-orange-500 bg-orange-50/50">เรทพิเศษ (%)</th>
-                                <th className="p-4 text-center text-slate-500 bg-slate-100/50 border-l border-white">คอมฯ ปกติ (฿)</th>
-                                <th className="p-4 text-center text-amber-500 bg-amber-50/50">คอมฯ พิเศษ (฿)</th>
-                                <th className="p-4 text-center text-emerald-600 rounded-r-xl bg-emerald-50/50">รวมสุทธิ (฿)</th>
+                                <th className="p-4 rounded-tl-xl w-[250px]">พนักงาน & เป้าหมาย</th>
+                                <th className="p-4 text-center border-l border-white w-[150px]">ยอดรวมทั้งหมด (฿)</th>
+                                <th className="p-4 border-l border-white bg-blue-100/50 text-blue-700 w-[240px]"><span className="text-sm">💰</span> กระเป๋า 1: เรทปกติ</th>
+                                <th className="p-4 border-l border-white bg-orange-100/50 text-orange-700 w-[240px]"><span className="text-sm">🎉</span> กระเป๋า 2: เรทเทศกาล</th>
+                                <th className="p-4 text-center border-l border-white bg-emerald-100/50 text-emerald-700 rounded-tr-xl w-[150px]">รวมสุทธิ (฿)</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -8614,71 +9552,123 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                                 const activeCamp = (typeof holidayCampaigns !== 'undefined' ? holidayCampaigns : []).find(c => todayStr >= c.startDate && todayStr <= c.endDate);
                                 const currentSpecialRate = activeCamp ? Number(activeCamp.rate) : 0;
 
-                                let normalComm = sales * (rate / 100);
                                 let holidayComm = 0;
+                                let specialSalesTotal = 0;
+
                                 if (typeof allLiveHistory !== 'undefined' && allLiveHistory.length > 0 && typeof holidayCampaigns !== 'undefined') {
-                                    const myLogs = allLiveHistory.filter(log => log.employee_id === empId);
+                                    // กรองเฉพาะรอบบิลนี้
+                                    const myLogs = allLiveHistory.filter(log => 
+                                      log.employee_id === empId && 
+                                      log.live_date >= cycleStart && 
+                                      log.live_date <= cycleEnd
+                                    );
+                                    
                                     myLogs.forEach(log => {
                                         const matchedCamp = holidayCampaigns.find(c => log.live_date >= c.startDate && log.live_date <= c.endDate);
                                         if (matchedCamp) {
-                                            holidayComm += Number(log.net_sales || 0) * (Number(matchedCamp.rate) / 100);
+                                            const netSale = Number(log.net_sales || 0);
+                                            holidayComm += netSale * (Number(matchedCamp.rate) / 100);
+                                            specialSalesTotal += netSale;
                                         }
                                     });
                                 }
 
+                                // 🎯 หักยอดพิเศษออกจากยอดรวม (ถ้าผู้ใช้แก้ช่องรวม ยอดปกติก็จะปรับตาม)
+                                const manualTotalSales = Number(sale.current_sales || 0);
+                                const finalSpecialSales = specialSalesTotal; 
+                                const finalNormalSales = Math.max(0, manualTotalSales - finalSpecialSales);
+
+                                let normalComm = finalNormalSales * (rate / 100);
                                 let totalComm = normalComm + holidayComm;
                                 const uniqueTargetId = sale.employees?.id || sale.employee_id || empCode || `temp-${index}`;
 
                                 return (
                                   <tr key={uniqueTargetId} className={`bg-white shadow-sm hover:shadow-md transition-all border border-slate-50 group ${empCode === 'PL001' ? 'ring-2 ring-amber-400/50 bg-amber-50/10' : ''}`}>
-                                    <td className="p-4 font-black rounded-l-xl whitespace-nowrap">
-                                      <div className="flex flex-col">
-                                        <div className="flex items-center gap-2">
-                                           <span className={`text-sm ${empCode === 'PL001' ? 'text-amber-700' : 'text-slate-800'}`}>{sale.employees?.full_name || 'พนักงานไม่มีชื่อ'}</span>
-                                           {empCode === 'PL001' && <span className="text-[9px] bg-amber-500 text-white px-1.5 py-0.5 rounded-md font-bold animate-pulse">CEO</span>}
-                                        </div>
-                                        <span className="text-[10px] text-indigo-500 font-black uppercase tracking-wider">{empCode} • {sale.employees?.position || '-'}</span>
-                                      </div>
-                                    </td>
                                     
-                                    <td className="p-4 w-32">
-                                      <input type="number" value={sale.current_sales ?? ''} onChange={(e) => setAllSalesData(prev => prev.map(s => {
-                                        const sId = s.employees?.id || s.employee_id || s.employees?.employee_code || `temp-${index}`;
-                                        return sId === uniqueTargetId ? { ...s, current_sales: e.target.value } : s;
-                                      }))} className="w-full text-center bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 font-bold focus:border-indigo-500 outline-none transition-all" />
-                                    </td>
-                                    <td className="p-4 w-32">
-                                      <input type="number" value={sale.target_sales ?? ''} onChange={(e) => setAllSalesData(prev => prev.map(s => {
-                                        const sId = s.employees?.id || s.employee_id || s.employees?.employee_code || `temp-${index}`;
-                                        return sId === uniqueTargetId ? { ...s, target_sales: e.target.value } : s;
-                                      }))} className="w-full text-center bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 font-bold text-indigo-600 focus:border-indigo-500 outline-none transition-all" />
-                                    </td>
-                                    <td className="p-4 w-24">
-                                      <input type="number" step="0.1" value={sale.commission_rate ?? ''} onChange={(e) => setAllSalesData(prev => prev.map(s => {
-                                        const sId = s.employees?.id || s.employee_id || s.employees?.employee_code || `temp-${index}`;
-                                        return sId === uniqueTargetId ? { ...s, commission_rate: e.target.value } : s;
-                                      }))} className="w-full text-center bg-slate-50 border border-slate-200 rounded-xl px-2 py-2 font-bold text-rose-500 focus:border-rose-500 outline-none transition-all" />
-                                    </td>
-                                    
-                                    <td className="p-4 text-center font-black bg-orange-50/30 border-l border-white">
-                                      {currentSpecialRate > 0 ? (
-                                        <div className="flex flex-col items-center justify-center">
-                                          <span className="text-orange-600 text-sm">{currentSpecialRate}%</span>
-                                          <span className="text-[9px] text-orange-400 mt-0.5 bg-orange-100 px-2 py-0.5 rounded-full border border-orange-200">{activeCamp?.name}</span>
-                                        </div>
-                                      ) : (
-                                        <span className="text-slate-300 text-sm">-</span>
-                                      )}
+                                    {/* 1. พนักงาน & เป้าหมาย */}
+                                    <td className="p-4 rounded-l-xl align-top">
+                                       <div className="flex flex-col gap-2">
+                                          <div className="flex items-center gap-2">
+                                             <span className={`text-sm font-black ${empCode === 'PL001' ? 'text-amber-700' : 'text-slate-800'}`}>{sale.employees?.full_name || 'พนักงานไม่มีชื่อ'}</span>
+                                             {empCode === 'PL001' && <span className="text-[9px] bg-amber-500 text-white px-1.5 py-0.5 rounded-md font-bold animate-pulse">CEO</span>}
+                                          </div>
+                                          <span className="text-[10px] text-indigo-500 font-black uppercase tracking-wider">{empCode} • {sale.employees?.position || '-'}</span>
+                                          <div className="mt-2 bg-slate-50 p-2 rounded-lg border border-slate-100">
+                                             <span className="text-[9px] text-slate-400 font-bold uppercase mb-1 block">🎯 เป้าหมายยอดขาย</span>
+                                             <input type="number" value={sale.target_sales ?? ''} onChange={(e) => setAllSalesData(prev => prev.map(s => {
+                                                const sId = s.employees?.id || s.employee_id || s.employees?.employee_code || `temp-${index}`;
+                                                return sId === uniqueTargetId ? { ...s, target_sales: e.target.value } : s;
+                                              }))} className="w-full bg-white border border-slate-200 rounded-md px-2 py-1.5 font-bold text-indigo-600 focus:border-indigo-500 outline-none text-xs shadow-inner" />
+                                          </div>
+                                       </div>
                                     </td>
 
-                                    <td className="p-4 text-center font-bold text-slate-600 bg-slate-50/50 border-l border-white">
-                                      ฿{normalComm.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                                    {/* 2. ยอดรวมทั้งหมด */}
+                                    <td className="p-4 align-top border-l border-slate-50 text-center">
+                                      <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 shadow-inner inline-block">
+                                        <span className="text-[10px] text-slate-400 font-bold uppercase mb-2 block flex items-center justify-center gap-1">📊 ยอดขายรวม <span className="text-rose-400" title="สามารถแก้ไขได้">*</span></span>
+                                        <input type="number" value={sale.current_sales ?? ''} onChange={(e) => setAllSalesData(prev => prev.map(s => {
+                                          const sId = s.employees?.id || s.employee_id || s.employees?.employee_code || `temp-${index}`;
+                                          return sId === uniqueTargetId ? { ...s, current_sales: e.target.value } : s;
+                                        }))} className="w-28 bg-white border-2 border-slate-200 rounded-lg px-2 py-2 font-black text-slate-800 focus:border-indigo-500 outline-none text-sm text-center shadow-sm transition-all" />
+                                      </div>
                                     </td>
-                                    <td className="p-4 text-center font-black text-amber-500 bg-amber-50/30">
-                                      ฿{holidayComm.toLocaleString(undefined, {minimumFractionDigits: 2})}
+
+                                    {/* 3. กระเป๋า 1: เรทปกติ */}
+                                    <td className="p-4 align-top bg-blue-50/40 border-l border-blue-100/50 relative overflow-hidden">
+                                       <div className="absolute top-0 left-0 w-1 h-full bg-blue-400"></div>
+                                       <div className="flex flex-col gap-2.5">
+                                          <div className="flex justify-between items-center bg-white p-2 rounded-lg border border-blue-100 shadow-sm">
+                                             <span className="text-[10px] text-slate-500 font-bold">ยอดขายฐาน:</span>
+                                             <span className="text-xs font-black text-slate-700">฿{finalNormalSales.toLocaleString()}</span>
+                                          </div>
+                                          <div className="flex items-center justify-between bg-white p-2 rounded-lg border border-blue-100 shadow-sm">
+                                             <span className="text-[10px] text-slate-500 font-bold">เรทคอมฯ (%):</span>
+                                             <input type="number" step="0.1" value={sale.commission_rate ?? ''} onChange={(e) => setAllSalesData(prev => prev.map(s => {
+                                                const sId = s.employees?.id || s.employee_id || s.employees?.employee_code || `temp-${index}`;
+                                                return sId === uniqueTargetId ? { ...s, commission_rate: e.target.value } : s;
+                                              }))} className="w-16 bg-blue-50 border border-blue-200 rounded-md px-2 py-1 font-black text-blue-700 focus:bg-white focus:border-blue-500 outline-none text-xs text-center" />
+                                          </div>
+                                          <div className="flex justify-between items-center mt-1 pt-2 border-t border-blue-200/60 px-1">
+                                             <span className="text-[10px] font-black text-blue-600 uppercase">ค่าคอมฯ ปกติ:</span>
+                                             <span className="text-sm font-black text-blue-700">฿{normalComm.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                          </div>
+                                       </div>
                                     </td>
-                                    <td className="p-4 text-center font-black text-emerald-600 rounded-r-xl bg-emerald-50/50">
-                                      ฿{totalComm.toLocaleString(undefined, {minimumFractionDigits: 2})}
+
+                                    {/* 4. กระเป๋า 2: เรทเทศกาล */}
+                                    <td className="p-4 align-top bg-orange-50/50 border-l border-orange-100/50 relative overflow-hidden">
+                                       <div className="absolute top-0 left-0 w-1 h-full bg-orange-400"></div>
+                                       <div className="flex flex-col gap-2.5">
+                                          <div className="flex justify-between items-center bg-white p-2 rounded-lg border border-orange-200 shadow-sm">
+                                             <span className="text-[10px] text-orange-600 font-bold flex items-center gap-1">✨ ยอดเทศกาล:</span>
+                                             <span className="text-xs font-black text-orange-700">฿{finalSpecialSales.toLocaleString()}</span>
+                                          </div>
+                                          <div className="flex justify-between items-center bg-white p-2 rounded-lg border border-orange-100 shadow-sm min-h-[38px]">
+                                             <span className="text-[10px] text-slate-500 font-bold">เรทพิเศษ:</span>
+                                             {currentSpecialRate > 0 ? (
+                                                <div className="flex items-center gap-1.5">
+                                                  <span className="text-[9px] text-orange-500 bg-orange-100 px-1.5 py-0.5 rounded border border-orange-200 truncate max-w-[80px] font-bold" title={activeCamp?.name}>{activeCamp?.name}</span>
+                                                  <span className="text-xs font-black text-orange-600">{currentSpecialRate}%</span>
+                                                </div>
+                                             ) : (
+                                                <span className="text-xs text-slate-300 font-bold px-2">-</span>
+                                             )}
+                                          </div>
+                                          <div className="flex justify-between items-center mt-1 pt-2 border-t border-orange-200/60 px-1">
+                                             <span className="text-[10px] font-black text-orange-600 uppercase">ค่าคอมฯ พิเศษ:</span>
+                                             <span className="text-sm font-black text-orange-700">฿{holidayComm.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                          </div>
+                                       </div>
+                                    </td>
+
+                                    {/* 5. รวมสุทธิ */}
+                                    <td className="p-4 align-middle bg-emerald-50/40 border-l border-emerald-100/50 rounded-r-xl text-center relative overflow-hidden">
+                                       <div className="absolute top-0 left-0 w-1 h-full bg-emerald-400"></div>
+                                       <div className="bg-white/80 p-3 rounded-xl shadow-sm border border-emerald-100">
+                                         <span className="text-[10px] font-black text-emerald-600 uppercase block mb-1.5">รวมรับสุทธิ</span>
+                                         <span className="text-lg md:text-xl font-black text-emerald-700 drop-shadow-sm">฿{totalComm.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                                       </div>
                                     </td>
                                   </tr>
                                 );
@@ -8688,7 +9678,7 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                         )}
                       </div>
 
-                      <div className="flex justify-end pt-4 border-t border-slate-100 shrink-0">
+                      <div className="flex justify-end pt-4 border-t border-slate-100 shrink-0 mt-2">
                         <button onClick={async () => { 
                           setIsSavingSales(true);
                           Swal.fire({ title: 'กำลังบันทึกข้อมูล...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
@@ -8744,7 +9734,7 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
           </div>
         )}
 
-        {/* ✅ VIEW: HISTORY (ประวัติการลาของฉัน - อัปเกรดให้เลื่อนได้และดูง่ายขึ้น 100%) */}
+{/* ✅ VIEW: HISTORY (ประวัติการลาของฉัน - แยกคอลัมน์ "วันที่ขอลา" ให้ชัดเจน) */}
         {currentView === "history" && (
           <div className="px-4 md:px-8 pb-8 z-10 flex-1 flex flex-col w-full overflow-hidden mt-4 animate-fade-in">
             <div className="bg-white/80 backdrop-blur-xl rounded-[1.5rem] md:rounded-[2rem] p-5 md:p-7 shadow-sm border border-white flex-1 flex flex-col w-full overflow-hidden">
@@ -8775,43 +9765,64 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
 
               {/* 📜 ส่วนตารางที่เลื่อนได้จริง (Scrollable Area) */}
               <div className="flex-1 overflow-x-auto overflow-y-auto w-full custom-scrollbar pr-1">
-                <table className="w-full text-left border-separate border-spacing-y-2 min-w-[700px]">
+                <table className="w-full text-left border-separate border-spacing-y-2 min-w-[850px]">
                   <thead className="text-[10px] md:text-xs text-slate-400 uppercase bg-slate-50 sticky top-0 z-20 shadow-sm">
                     <tr>
-                      <th className="p-3 md:p-4 rounded-l-lg md:rounded-l-xl">{t.thDate}</th>
+                      <th className="p-3 md:p-4 rounded-l-lg md:rounded-l-xl w-32">วันที่ยื่นเรื่อง</th>
+                      {/* 🆕 เพิ่มคอลัมน์ใหม่ "วันที่ขอลา" แยกออกมาเด่นๆ */}
+                      <th className="p-3 md:p-4 text-indigo-500 w-48">📅 วันที่ขอลาหยุด</th>
                       <th className="p-3 md:p-4">{t.thType}</th>
                       <th className="p-3 md:p-4">{t.thDuration}</th>
-                      <th className="p-3 md:p-4 w-1/3">{t.thReason || "เหตุผล"}</th>
+                      <th className="p-3 md:p-4 w-1/4">{t.thReason || "เหตุผล"}</th>
                       <th className="p-3 md:p-4 text-right rounded-r-lg md:rounded-r-xl">{t.thStatus}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredLeaves.length === 0 ? (
                       <tr>
-                        <td colSpan="5" className="text-center py-20 text-slate-400 font-bold bg-slate-50/50 rounded-2xl">
+                        <td colSpan="6" className="text-center py-20 text-slate-400 font-bold bg-slate-50/50 rounded-2xl">
                           {t.noLeaveHistory || "ไม่พบประวัติการลา"}
                         </td>
                       </tr>
                     ) : (
-                      filteredLeaves.map(l => (
+                      filteredLeaves.map(l => {
+                        // 💡 จัดการ Format วันที่ขอหยุดจริง
+                        const startDate = new Date(l.start_date).toLocaleDateString(lang==='TH'?'th-TH':'en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+                        const endDate = new Date(l.end_date).toLocaleDateString(lang==='TH'?'th-TH':'en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+                        const isSameDate = l.start_date === l.end_date;
+
+                        return (
                         <tr key={l.id} className="bg-white shadow-sm border border-slate-50 group hover:bg-slate-50/50 transition-all">
-                          <td className="p-3 md:p-4 text-xs md:text-sm font-bold text-slate-500 rounded-l-lg md:rounded-l-xl whitespace-nowrap">
+                          {/* 1. คอลัมน์วันที่ยื่นเรื่อง (เอาไว้ดูเฉยๆ สีเทาๆ) */}
+                          <td className="p-3 md:p-4 text-xs md:text-sm font-bold text-slate-500 rounded-l-lg md:rounded-l-xl whitespace-nowrap align-top">
                             <div className="flex flex-col">
                               <span>{new Date(l.created_at).toLocaleDateString(lang==='TH'?'th-TH':'en-US')}</span>
                               <span className="text-[9px] text-slate-400">{new Date(l.created_at).toLocaleTimeString('th-TH').slice(0,5)} น.</span>
                             </div>
                           </td>
-                          <td className="p-3 md:p-4 text-xs md:text-sm font-black text-slate-700 whitespace-nowrap">
+                          
+                          {/* 2. 🆕 คอลัมน์วันที่ขอลาหยุด (เด่นๆ สีม่วง มองเห็นชัดเจน) */}
+                          <td className="p-3 md:p-4 text-xs md:text-sm font-black text-indigo-600 whitespace-nowrap bg-indigo-50/30 align-top">
+                            {isSameDate ? startDate : `${startDate} - ${endDate}`}
+                          </td>
+
+                          {/* 3. ประเภทการลา */}
+                          <td className="p-3 md:p-4 text-xs md:text-sm font-black text-slate-700 whitespace-nowrap align-top">
                             {getTranslatedType(l.leave_type)}
                           </td>
-                          <td className="p-3 md:p-4 text-xs md:text-sm font-black text-rose-500 whitespace-nowrap">
+
+                          {/* 4. ระยะเวลา */}
+                          <td className="p-3 md:p-4 text-xs md:text-sm font-black text-rose-500 whitespace-nowrap align-top">
                             {formatDuration(l.duration_minutes)}
                           </td>
-                          <td className="p-3 md:p-4 text-[11px] font-medium text-slate-500">
-                            {/* ✨ Clamp เหตุผลไว้ให้ดูง่าย แต่ขยายได้เมื่อชี้ */}
-                            <div className="line-clamp-1 group-hover:line-clamp-none transition-all duration-300">{l.reason || '-'}</div>
+
+                          {/* 5. เหตุผล */}
+                          <td className="p-3 md:p-4 text-[11px] font-medium text-slate-500 align-top">
+                            <div className="line-clamp-2 group-hover:line-clamp-none transition-all duration-300">{l.reason || '-'}</div>
                           </td>
-                          <td className="p-3 md:p-4 text-right rounded-r-lg md:rounded-r-xl whitespace-nowrap">
+
+                          {/* 6. สถานะ */}
+                          <td className="p-3 md:p-4 text-right rounded-r-lg md:rounded-r-xl whitespace-nowrap align-top">
                             <span className={`text-[10px] md:text-xs px-2 md:px-3 py-1 md:py-1.5 rounded-full font-black ${
                               l.status==='อนุมัติ' ? 'bg-emerald-100 text-emerald-600' : 
                               l.status==='รออนุมัติ' ? 'bg-amber-100 text-amber-600' : 
@@ -8821,7 +9832,7 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                             </span>
                           </td>
                         </tr>
-                      ))
+                      )})
                     )}
                   </tbody>
                 </table>
@@ -8958,74 +9969,119 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
           <div className="bg-white/80 backdrop-blur-xl rounded-[1.5rem] md:rounded-[2rem] p-5 md:p-7 shadow-sm border border-white flex-1 flex flex-col w-full overflow-hidden">
             
             {/* Header & Filters */}
-            <div className="flex flex-col lg:flex-row justify-between gap-3 md:gap-4 mb-4 md:mb-6 pb-4 md:pb-6 border-b border-slate-100 shrink-0">
+            <div className="flex flex-col xl:flex-row justify-between gap-4 mb-4 md:mb-6 pb-4 md:pb-6 border-b border-slate-100 shrink-0">
               <h3 className="font-black text-slate-800 text-lg md:text-xl flex items-center gap-2">
                 📅 {user?.role === 'admin' || user?.role === 'ceo' ? t.allAttendance : t.myAttendance}
               </h3>
               
-              <div className="flex flex-wrap gap-2 w-full lg:w-auto items-center">
-                {(user?.role === 'admin' || user?.role === 'ceo') && (
-                  <div className="relative flex-1 lg:w-64">
+              <div className="flex flex-col md:flex-row gap-3 w-full xl:w-auto md:items-center">
+                
+                {/* ก้อนที่ 1: วันที่ + ชื่อ */}
+                <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+                  
+                  {/* 🟢 1. ช่องกรองค้นหาตาม "วันที่" (แก้ปัญหาบนมือถือ iOS 100%) */}
+                  <div className="relative w-full sm:w-48 md:w-48 flex-shrink-0">
+                    {/* ข้อความลอยทับตอนที่ยังไม่เลือกวันที่ */}
+                    {!attnSearchDate && (
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none z-10">
+                        <span className="text-slate-500 font-bold text-xs md:text-sm bg-slate-50 pl-1 pr-4">📅 ค้นหาตามวันที่...</span>
+                      </div>
+                    )}
+                    <input 
+                      type="date" 
+                      value={attnSearchDate || ""} 
+                      onChange={(e) => setAttnSearchDate(e.target.value)}
+                      // ถ้ายังไม่เลือกวันที่ ให้ตัวหนังสือในช่องโปร่งใส (เพื่อไม่ให้ตีกับข้อความลอย) พอเลือกแล้วค่อยโชว์สีเข้ม
+                      className={`w-full h-[42px] bg-slate-50 border border-slate-200 rounded-xl px-3 font-bold outline-none text-xs md:text-sm shadow-inner focus:border-indigo-400 cursor-pointer ${!attnSearchDate ? 'text-transparent' : 'text-slate-700'}`}
+                    />
+                    {attnSearchDate && (
+                      <button 
+                        onClick={() => setAttnSearchDate("")} 
+                        className="absolute right-8 top-1/2 -translate-y-1/2 text-slate-400 hover:text-rose-500 font-black text-xs bg-slate-50 px-1 z-10"
+                        title="ล้างวันที่"
+                      >
+                        ✖
+                      </button>
+                    )}
+                  </div>
+
+                  {/* 2. ช่องค้นหาชื่อ (CEO/Admin) */}
+                  {(user?.role === 'admin' || user?.role === 'ceo') && (
+                    <div className="relative w-full sm:w-56 md:w-56 lg:w-64 flex-shrink-0">
+                      <select 
+                        value={attnSearchName}
+                        onChange={(e) => setAttnSearchName(e.target.value)}
+                        className="w-full h-[42px] bg-slate-50 border border-slate-200 rounded-xl pl-3 pr-8 font-bold outline-none text-xs md:text-sm shadow-inner focus:border-indigo-400 cursor-pointer appearance-none text-slate-700 truncate"
+                      >
+                        <option value="">{t.allLeavesFilterAll || "-- ค้นหาพนักงานทุกคน --"}</option>
+                        {employees && employees.length > 0 ? (
+                          employees
+                            .filter(emp => emp.full_name)
+                            .sort((a, b) => a.full_name.localeCompare(b.full_name, 'th'))
+                            .map(emp => (
+                              <option key={emp.id} value={emp.full_name}>คุณ {emp.full_name}</option>
+                            ))
+                        ) : (
+                          <option disabled>⏳ กำลังโหลด...</option>
+                        )}
+                      </select>
+                      <div className="absolute inset-y-0 right-3 flex items-center pointer-events-none text-slate-400 text-[10px]">▼</div>
+                    </div>
+                  )}
+                </div>
+
+                {/* ก้อนที่ 2: สถานะ + Export */}
+                <div className="flex gap-3 w-full md:w-auto">
+                  {/* 3. ช่องกรองสถานะ */}
+                  <div className="relative w-1/2 md:w-32 flex-shrink-0">
                     <select 
-                      value={attnSearchName}
-                      onChange={(e) => setAttnSearchName(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg md:rounded-xl pl-3 pr-8 py-2 font-bold outline-none text-[10px] md:text-sm shadow-inner focus:border-indigo-400 cursor-pointer appearance-none text-slate-700"
+                      value={attnFilterStatus} 
+                      onChange={(e) => setAttnFilterStatus(e.target.value)}
+                      className="w-full h-[42px] bg-slate-50 border border-slate-200 rounded-xl pl-3 pr-8 font-bold outline-none text-xs md:text-sm shadow-inner focus:border-indigo-400 cursor-pointer appearance-none text-slate-700"
                     >
-                      <option value="">{t.allLeavesFilterAll || "-- แสดงพนักงานทุกคน --"}</option>
-                      {employees && employees.length > 0 ? (
-                        employees
-                          .filter(emp => emp.full_name)
-                          .sort((a, b) => a.full_name.localeCompare(b.full_name, 'th'))
-                          .map(emp => (
-                            <option key={emp.id} value={emp.full_name}>คุณ {emp.full_name}</option>
-                          ))
-                      ) : (
-                        <option disabled>⏳ กำลังโหลดรายชื่อ...</option>
-                      )}
+                      <option value="ALL">{t.allStatus}</option>
+                      <option value="normal">{t.filterNormal}</option>
+                      <option value="late">{t.filterLate}</option>
                     </select>
                     <div className="absolute inset-y-0 right-3 flex items-center pointer-events-none text-slate-400 text-[10px]">▼</div>
                   </div>
-                )}
-                
-                <select 
-                  value={attnFilterStatus} 
-                  onChange={(e) => setAttnFilterStatus(e.target.value)}
-                  className="flex-1 lg:flex-none bg-slate-50 border border-slate-200 rounded-lg md:rounded-xl px-2 md:px-4 py-2 font-bold outline-none text-[10px] md:text-sm cursor-pointer"
-                >
-                  <option value="ALL">{t.allStatus}</option>
-                  <option value="normal">{t.filterNormal}</option>
-                  <option value="late">{t.filterLate}</option>
-                </select>
 
-                <button onClick={() => {
-                  const filteredData = attendanceList
-                    .filter(a => attnFilterStatus === "ALL" || a.status === attnFilterStatus || (attnFilterStatus==='late' && a.status==='late') || (attnFilterStatus==='normal' && a.status==='normal'))
-                    .filter(a => !attnSearchName || a.full_name === attnSearchName);
+                  {/* 4. ปุ่ม Export */}
+                  <button onClick={() => {
+                    const filteredData = attendanceList
+                      .filter(a => attnFilterStatus === "ALL" || a.status === attnFilterStatus || (attnFilterStatus==='late' && a.status==='late') || (attnFilterStatus==='normal' && a.status==='normal'))
+                      .filter(a => !attnSearchName || a.full_name === attnSearchName)
+                      .filter(a => !attnSearchDate || a.date === attnSearchDate);
 
-                  if(filteredData.length === 0) return Swal.fire('แจ้งเตือน', 'ไม่มีข้อมูลในเงื่อนไขที่คุณเลือกครับ', 'warning');
-                  
-                  let csvContent = "วันที่,ชื่อพนักงาน,เวลาเข้า,เวลาออก,ชั่วโมงทำงาน,สถานะ\n";
-                  filteredData.forEach(r => {
-                    let workHours = '-';
-                    if (r.timestamp_in && r.timestamp_out) {
-                      const diffMs = new Date(r.timestamp_out) - new Date(r.timestamp_in);
-                      if (diffMs > 0) {
-                        const totalMins = Math.floor(diffMs / 60000);
-                        workHours = `${Math.floor(totalMins / 60)} ชม. ${totalMins % 60} นาที`;
+                    if(filteredData.length === 0) return Swal.fire('แจ้งเตือน', 'ไม่มีข้อมูลในเงื่อนไขที่คุณเลือกครับ', 'warning');
+                    
+                    let csvContent = "วันที่,ชื่อพนักงาน,เวลาเข้า,เวลาออก,ชั่วโมงทำงาน,สถานะ\n";
+                    filteredData.forEach(r => {
+                      let workHours = '-';
+                      if (r.timestamp_in && r.timestamp_out) {
+                        const tIn = new Date(r.timestamp_in).setSeconds(0,0);
+                        const tOut = new Date(r.timestamp_out).setSeconds(0,0);
+                        const diffMs = tOut - tIn;
+                        
+                        if (diffMs > 0) {
+                          const totalMins = Math.floor(diffMs / 60000);
+                          workHours = `${Math.floor(totalMins / 60)} ชม. ${totalMins % 60} นาที`;
+                        }
                       }
-                    }
-                    csvContent += `${r.date},${r.full_name},${r.time_in || '-'},${r.time_out || '-'},${workHours},${r.status === 'late' ? 'สาย' : 'ปกติ'}\n`;
-                  });
-                  
-                  const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
-                  const url = URL.createObjectURL(blob);
-                  const link = document.createElement("a");
-                  link.setAttribute("href", url);
-                  link.setAttribute("download", `Attendance_${new Date().toISOString().split('T')[0]}.csv`);
-                  link.click();
-                }} className="bg-emerald-50 text-emerald-600 border border-emerald-200 px-3 py-2 rounded-lg font-bold text-[10px] md:text-sm hover:bg-emerald-100 transition-all flex items-center gap-1.5 h-full">
-                  📥 Export
-                </button>
+                      csvContent += `${r.date},${r.full_name},${r.time_in || '-'},${r.time_out || '-'},${workHours},${r.status === 'late' ? 'สาย' : 'ปกติ'}\n`;
+                    });
+                    
+                    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement("a");
+                    link.setAttribute("href", url);
+                    link.setAttribute("download", `Attendance_${new Date().toISOString().split('T')[0]}.csv`);
+                    link.click();
+                  }} className="w-1/2 md:w-auto h-[42px] flex-shrink-0 bg-emerald-50 text-emerald-600 border border-emerald-200 px-4 rounded-xl font-black text-xs md:text-sm hover:bg-emerald-100 transition-all flex items-center justify-center gap-2 shadow-sm">
+                    📥 Export
+                  </button>
+                </div>
+
               </div>
             </div>
 
@@ -9051,6 +10107,7 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                     {attendanceList
                       .filter(a => attnFilterStatus === "ALL" || a.status === attnFilterStatus || (attnFilterStatus==='late' && a.status==='late') || (attnFilterStatus==='normal' && a.status==='normal'))
                       .filter(a => !attnSearchName || a.full_name === attnSearchName)
+                      .filter(a => !attnSearchDate || a.date === attnSearchDate)
                       .map((record, index) => {
                         
                         const inDateObj = record.timestamp_in ? new Date(record.timestamp_in) : null;
@@ -9059,7 +10116,11 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                         // ⏱️ คำนวณชั่วโมงทำงานสำหรับโชว์ในตาราง
                         let workHoursDisplay = '--:--';
                         if (inDateObj && outDateObj) {
-                          const diffMs = outDateObj - inDateObj;
+                          const exactStart = new Date(inDateObj).setSeconds(0, 0);
+                          const exactEnd = new Date(outDateObj).setSeconds(0, 0);
+                          
+                          const diffMs = exactEnd - exactStart;
+                          
                           if (diffMs > 0) {
                             const totalMins = Math.floor(diffMs / 60000);
                             const hours = Math.floor(totalMins / 60);
@@ -9119,7 +10180,7 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                               </div>
                             </td>
 
-                            {/* ⏱️ คอลัมน์ที่เพิ่มใหม่: ชั่วโมงทำงาน */}
+                            {/* ⏱️ ชั่วโมงทำงาน */}
                             <td className="p-3 md:p-4 text-center">
                               <div className="bg-slate-50 border border-slate-100 px-3 py-1.5 rounded-xl">
                                 <span className={`font-black text-[11px] md:text-xs ${workHoursDisplay !== '--:--' ? 'text-indigo-600' : 'text-slate-300'}`}>
@@ -10169,7 +11230,7 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                     ))
                   ))}
 
-                  {/* --- แท็บอนุมัติปรับปรุงเวลา --- */}
+                 {/* --- แท็บอนุมัติปรับปรุงเวลา --- */}
                   {adminTab === 'adjustments' && (adminAdjustments.length === 0 ? <div className="text-center py-10 md:py-20 text-slate-400 font-bold text-sm md:text-lg">{t.noPending}</div> : (
                     adminAdjustments.map(req => (
                       <div key={req.id} className="bg-white border-2 border-slate-100 rounded-xl md:rounded-2xl p-4 md:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between hover:border-purple-300 transition-colors shadow-sm gap-4">
@@ -10182,30 +11243,53 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                         </div>
                         <div className="flex gap-2 w-full sm:w-auto">
                           
-                          {/* 🔍 ปุ่มดูรายละเอียดปรับปรุงเวลา */}
+                          {/* 🔍 ปุ่มดูรายละเอียด (แยก สลับวันหยุด vs แก้ไขเวลา) */}
                           <button onClick={() => {
-                            // ดึงชื่อมาเก็บไว้ในตัวแปรก่อนให้ชัวร์
                             const empName = req.employees?.full_name || req.full_name || 'ไม่ระบุชื่อ';
+                            
+                            // เช็คว่าเป็นสลับวันหยุดหรือแก้ไขเวลา
+                            const isSwap = req.request_type === 'สลับวันหยุด' || req.request_type === 'Swap Day';
+                            
+                            let htmlContent = '';
+                            let titleText = '';
+
+                            if (isSwap) {
+                                titleText = '⇄ รายละเอียดการสลับวันหยุด';
+                                htmlContent = `
+                                  <div class="text-left text-sm space-y-3 mt-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                    <p><b>👤 พนักงาน:</b> <span class="text-indigo-600 font-bold">${empName}</span></p>
+                                    <p><b>❌ วันหยุดเดิม:</b> <span class="text-rose-600 font-bold">${req.old_date ? new Date(req.old_date).toLocaleDateString('th-TH') : '-'}</span></p>
+                                    <p><b>✅ ขอเปลี่ยนเป็น:</b> <span class="text-emerald-600 font-bold">${req.new_date ? new Date(req.new_date).toLocaleDateString('th-TH') : '-'}</span></p>
+                                    <p><b>📝 เหตุผล:</b> ${req.reason || '-'}</p>
+                                  </div>
+                                `;
+                            } else {
+                                titleText = '🕒 รายละเอียดการแก้ไขเวลา';
+                                htmlContent = `
+                                  <div class="text-left text-sm space-y-3 mt-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                    <p><b>👤 พนักงาน:</b> <span class="text-indigo-600 font-bold">${empName}</span></p>
+                                    <p><b>📅 วันที่เกิดเหตุ:</b> ${req.incident_date ? new Date(req.incident_date).toLocaleDateString('th-TH') : '-'}</p>
+                                    <p><b>ประเภทเวลา:</b> <span class="text-slate-800 font-bold">${req.time_type || '-'}</span></p>
+                                    <p><b>❌ เวลาเดิม:</b> <span class="text-rose-600 font-bold line-through">${req.old_time ? req.old_time.substring(0,5) : '-'}</span></p>
+                                    <p><b>✅ ขอเปลี่ยนเป็น:</b> <span class="text-emerald-600 font-bold">${req.new_time ? req.new_time.substring(0,5) : '-'}</span></p>
+                                    <p><b>📝 เหตุผล:</b> ${req.reason || '-'}</p>
+                                  </div>
+                                `;
+                            }
+
                             Swal.fire({
-                              title: '⏰ รายละเอียดปรับปรุงเวลา',
-                              html: `
-                                <div class="text-left text-sm space-y-3 mt-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
-                                  <p><b>👤 พนักงาน:</b> <span class="text-indigo-600 font-bold">${empName}</span></p>
-                                  <p><b>📅 วันที่ขอปรับ:</b> ${req.adjust_date || req.date ? new Date(req.adjust_date || req.date).toLocaleDateString('th-TH') : '-'}</p>
-                                  <p><b>🟢 ขอเวลาเข้าใหม่:</b> <span class="text-emerald-600 font-bold">${req.adjust_in || req.time_in ? (req.adjust_in || req.time_in).substring(0,5) : '-'}</span></p>
-                                  <p><b>🔴 ขอเวลาออกใหม่:</b> <span class="text-rose-600 font-bold">${req.adjust_out || req.time_out ? (req.adjust_out || req.time_out).substring(0,5) : '-'}</span></p>
-                                  <p><b>📝 เหตุผล:</b> ${req.reason || '-'}</p>
-                                </div>
-                              `,
-                              confirmButtonText: 'ปิด',
-                              confirmButtonColor: '#64748b'
+                              title: titleText,
+                              html: htmlContent,
+                              confirmButtonText: 'ปิดหน้าต่าง',
+                              confirmButtonColor: '#64748b',
+                              customClass: { popup: 'rounded-[2rem] shadow-2xl border border-slate-100' }
                             });
-                          }} className="flex-1 sm:flex-none px-4 py-2 bg-blue-50 text-blue-600 rounded-lg font-black text-xs md:text-sm">🔍</button>
+                          }} className="flex-1 sm:flex-none px-4 py-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg font-black text-xs md:text-sm transition-colors">🔍 ดูรายละเอียด</button>
 
                           {/* 🎯 ปุ่มปฏิเสธ (เรียก Popup) */}
-                          <button onClick={() => executeRejectWithPopup(req, `คำขอ${getTranslatedType(req.request_type)}`, false)} className="flex-1 sm:flex-none px-4 py-2 bg-rose-50 text-rose-600 rounded-lg font-black text-xs md:text-sm">{t.btnReject}</button>
+                          <button onClick={() => executeRejectWithPopup(req, `คำขอ${getTranslatedType(req.request_type)}`, false)} className="flex-1 sm:flex-none px-4 py-2 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded-lg font-black text-xs md:text-sm transition-colors">{t.btnReject}</button>
                           {/* 🎯 ปุ่มอนุมัติ (เรียก Popup) */}
-                          <button onClick={() => executeApproveWithPopup(req, `คำขอ${getTranslatedType(req.request_type)}`, false)} className="flex-1 sm:flex-none px-4 py-2 bg-emerald-500 text-white rounded-lg font-black text-xs md:text-sm">✅ {t.btnApprove}</button>
+                          <button onClick={() => executeApproveWithPopup(req, `คำขอ${getTranslatedType(req.request_type)}`, false)} className="flex-1 sm:flex-none px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-black text-xs md:text-sm transition-colors">✅ {t.btnApprove}</button>
                         </div>
                       </div>
                     ))
@@ -11273,132 +12357,627 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
         </div>
       )}
 
-{/* 🗂️ VIEW: ALL EMPLOYEE LEAVES (ระบบกรองข้อมูล 3 ชั้น: ชื่อ, ประเภท, สถานะ) */}
-        {currentView === "settings_all_leaves" && (user?.role === 'admin' || user?.role === 'ceo') && (
+{/* ========================================================================= */}
+      {/* 🗂️ VIEW: ALL EMPLOYEE LEAVES (ระบบกรองข้อมูล 4 ชั้น: ชื่อ, ประเภท, สถานะ, วันที่) */}
+      {/* ========================================================================= */}
+        {currentView === "settings_all_leaves" && (user?.role === 'admin' || user?.role === 'ceo') && (() => {
+          
+          // 🟢 1. กรองเอาเฉพาะ "การลา" จริงๆ ตัด "วันหยุด PT" ออกไปให้หมด เพื่อไม่ให้ปนกัน
+          const leaveOnlyData = allEmpLeaves?.filter(l => 
+            l.leave_type !== 'วันหยุดประจำสัปดาห์ (PT)' && 
+            l.leave_type !== 'Weekly Day Off (PT)'
+          ) || [];
+
+          return (
+            <div className="px-4 md:px-8 pb-8 z-10 flex-1 flex flex-col w-full mt-4 animate-fade-in">
+              <div className="bg-white/80 backdrop-blur-xl rounded-[2rem] p-6 md:p-8 shadow-sm border border-white flex-1 flex flex-col">
+                
+                <div className="mb-6 border-b border-slate-100 pb-6">
+                  <h3 className="font-black text-slate-800 text-xl flex items-center gap-2 mb-4">🗂️ {t.settingsAllLeaves}</h3>
+                  <p className="text-sm text-slate-500 font-medium mb-4">{t.allLeavesDesc}</p>
+                  
+                  {(() => {
+                    // 🟢 2. ให้ AI วิเคราะห์เฉพาะข้อมูลการลาจริงๆ เท่านั้น
+                    const pendingLeaves = leaveOnlyData.filter(l => l.status === 'รออนุมัติ');
+                    const approvedLeaves = leaveOnlyData.filter(l => l.status === 'อนุมัติ');
+
+                    // 🟢 ถ้าไม่มีรายการรออนุมัติเลย ให้แสดงกล่องนี้แทนการซ่อนไปเลย
+                    if (pendingLeaves.length === 0) {
+                      return (
+                        <div className="mb-4 relative z-10 animate-fade-in">
+                          <div className="p-4 rounded-[1.5rem] border bg-slate-50 border-slate-200 shadow-sm flex items-center gap-3">
+                            <span className="text-xl">✅</span>
+                            <h4 className="font-black text-sm text-slate-600">
+                              AI Predictor: ตอนนี้ไม่มีคำขอลาที่รออนุมัติ ระบบเคลียร์เรียบร้อยครับ
+                            </h4>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    const warnings = [];
+                    const safeLeaves = []; 
+
+                    pendingLeaves.forEach(pending => {
+                      if(!pending.start_date || !pending.end_date) return;
+                      
+                      const overlappingLeaves = approvedLeaves.filter(app => {
+                        if(!app.start_date || !app.end_date) return false;
+                        return (pending.start_date <= app.end_date) && (pending.end_date >= app.start_date);
+                      });
+
+                      if (overlappingLeaves.length > 0) {
+                        const overlapNames = overlappingLeaves.map(o => o.employees?.full_name || 'ไม่ทราบชื่อ').join(', ');
+                        warnings.push(`คุณ ${pending.employees?.full_name} 🗓️ ขอลาตรงกับ: ${overlapNames} (โปรดระวังกำลังคนไม่พอ)`);
+                      } else {
+                        safeLeaves.push(`คุณ ${pending.employees?.full_name} 🗓️ ไม่มีคิวชนกับพนักงานคนอื่น (สามารถอนุมัติได้ปลอดภัย)`);
+                      }
+                    });
+
+                    return (
+                      <div className="mb-4 relative z-10 animate-fade-in space-y-3">
+                        
+                        {/* 🔴 กล่องแจ้งเตือนกรณีมีคนลาชนกัน */}
+                        {warnings.length > 0 && (
+                          <div className="p-5 rounded-[1.5rem] border bg-amber-50 border-amber-200 shadow-sm">
+                            <div className="flex items-center gap-3 mb-3">
+                              <span className="text-xl animate-pulse">🤖</span>
+                              <h4 className="font-black text-sm uppercase tracking-wider text-amber-600">
+                                AI Leave Alert: พบการขอลาหยุดตรงกัน {warnings.length} รายการ
+                              </h4>
+                            </div>
+                            <div className="space-y-2">
+                              {warnings.map((warn, i) => (
+                                <p key={`warn-${i}`} className="text-xs font-bold text-amber-700 flex items-center gap-2 bg-white p-2.5 rounded-xl border border-amber-100 shadow-sm">
+                                  <span className="w-1.5 h-1.5 bg-amber-500 rounded-full"></span> ⚠️ {warn}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 🟢 กล่องแจ้งเตือนกรณีปลอดภัย (ไม่ชน) */}
+                        {safeLeaves.length > 0 && (
+                          <div className="p-5 rounded-[1.5rem] border bg-emerald-50 border-emerald-200 shadow-sm">
+                            <div className="flex items-center gap-3 mb-3">
+                              <span className="text-xl">✅</span>
+                              <h4 className="font-black text-sm uppercase tracking-wider text-emerald-600">
+                                AI Predictor: คำขอลาที่ปลอดภัย ไม่มีคิวชน {safeLeaves.length} รายการ
+                              </h4>
+                            </div>
+                            <div className="space-y-2">
+                              {safeLeaves.map((safe, i) => (
+                                <p key={`safe-${i}`} className="text-xs font-bold text-emerald-700 flex items-center gap-2 bg-white p-2.5 rounded-xl border border-emerald-100 shadow-sm">
+                                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span> 🟢 {safe}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                      </div>
+                    );
+                  })()}
+
+                  {/* ✨ ปรับ Grid เป็น 4 คอลัมน์ รองรับช่องค้นหาวันที่ (ล็อก min-w-0 กันทะลักกรอบ) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 w-full">
+                    
+                    <div className="relative min-w-0 w-full">
+                      <span className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-xs">👤</span>
+                      <select 
+                        value={empLeaveSearch} 
+                        onChange={(e) => setEmpLeaveSearch(e.target.value)}
+                        className="w-full max-w-full box-border min-w-0 bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold outline-none text-sm shadow-inner focus:border-indigo-400 cursor-pointer appearance-none text-slate-700 m-0 block"
+                      >
+                        <option value="">{t.allLeavesFilterAll}</option>
+                        {employees && employees.length > 0 ? (
+                          employees.map(emp => (
+                            <option key={emp.id} value={emp.full_name}>
+                              {lang === 'TH' ? `คุณ ${emp.full_name}` : emp.full_name}
+                            </option>
+                          ))
+                        ) : (
+                          <option value="" disabled>กำลังโหลดข้อมูล...</option>
+                        )}
+                      </select>
+                      <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400 text-[10px]">▼</div>
+                    </div>
+
+                    <div className="relative min-w-0 w-full">
+                      <span className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-xs">🔖</span>
+                      <select 
+                        value={allLeavesTypeFilter} 
+                        onChange={(e) => setAllLeavesTypeFilter(e.target.value)}
+                        className="w-full max-w-full box-border min-w-0 bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold outline-none text-sm shadow-inner focus:border-indigo-400 cursor-pointer appearance-none text-slate-700 m-0 block"
+                      >
+                        <option value="ALL">{t.allTypes}</option>
+                        <option value="ลาป่วย">{t.sickLeave}</option>
+                        <option value="ลากิจ">{t.personalLeave}</option>
+                        <option value="ลาพักร้อน">{t.annualLeave}</option>
+                        <option value="ลาฉุกเฉิน">{t.emergencyLeave}</option>
+                        <option value="ลาไม่รับเงินเดือน">{lang === 'TH' ? 'ลาไม่รับเงินเดือน' : 'Leave Without Pay'}</option>
+                      </select>
+                      <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400 text-[10px]">▼</div>
+                    </div>
+
+                    <div className="relative min-w-0 w-full">
+                      <span className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-xs">⚖️</span>
+                      <select 
+                        value={allLeavesStatusFilter} 
+                        onChange={(e) => setAllLeavesStatusFilter(e.target.value)}
+                        className="w-full max-w-full box-border min-w-0 bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold outline-none text-sm shadow-inner focus:border-indigo-400 cursor-pointer appearance-none text-slate-700 m-0 block"
+                      >
+                        <option value="ALL">{t.allStatus}</option>
+                        <option value="รออนุมัติ">{t.pending}</option>
+                        <option value="อนุมัติ">{t.approved}</option>
+                        <option value="ไม่อนุมัติ">{t.rejected}</option>
+                      </select>
+                      <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400 text-[10px]">▼</div>
+                    </div>
+
+                    {/* 🚀 ช่องค้นหา "วันที่ลา" (กันทะลักจอ) */}
+                    <div className="relative min-w-0 w-full overflow-hidden rounded-xl">
+                      <span className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-xs z-10">📅</span>
+                      <input 
+                        type="date"
+                        value={leaveSearchDate || ""}
+                        onChange={(e) => setLeaveSearchDate(e.target.value)}
+                        className="w-full max-w-full box-border min-w-0 bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-8 py-2.5 font-bold outline-none text-sm shadow-inner focus:border-indigo-400 cursor-pointer text-slate-700 m-0 block appearance-none"
+                      />
+                      {leaveSearchDate && (
+                        <button 
+                          onClick={() => setLeaveSearchDate("")} 
+                          className="absolute inset-y-0 right-3 flex items-center text-slate-400 hover:text-rose-500 font-bold z-10 bg-slate-50 pl-2"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+              <div className="flex-1 overflow-x-auto overflow-y-auto w-full custom-scrollbar pr-2">
+                <table className="w-full text-left border-separate border-spacing-y-2 min-w-[1000px]">
+                  <thead className="text-xs text-slate-400 uppercase bg-slate-50 sticky top-0 z-10 shadow-sm">
+                    <tr>
+                      <th className="p-4 rounded-l-xl">📅 วันที่ยื่นเรื่อง</th>
+                      <th className="p-4">{t.thEmp}</th>
+                      <th className="p-4 text-pink-600">🏖️ วันที่ขอหยุด</th>
+                      <th className="p-4">{t.thTypeDuration}</th>
+                      <th className="p-4 w-1/4">{t.thReason}</th>
+                      <th className="p-4 text-center">{t.thLocation}</th>
+                      <th className="p-4 text-right">{t.thStatus}</th>
+                      <th className="p-4 text-center rounded-r-xl">รายละเอียด</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {leaveOnlyData
+                      .filter(l => !empLeaveSearch || l.employees?.full_name === empLeaveSearch)
+                      .filter(l => allLeavesTypeFilter === "ALL" || l.leave_type === allLeavesTypeFilter)
+                      .filter(l => allLeavesStatusFilter === "ALL" || l.status === allLeavesStatusFilter)
+                      // ✨ กรองด้วยวันที่ลา
+                      .filter(l => !leaveSearchDate || (l.start_date && l.start_date.split('T')[0] === leaveSearchDate))
+                      .length === 0 ? (
+                        <tr><td colSpan="8" className="text-center py-10 text-slate-400 font-bold bg-slate-50 rounded-xl">{t.noLeaveHistory}</td></tr>
+                      ) : (
+                        leaveOnlyData
+                          .filter(l => !empLeaveSearch || l.employees?.full_name === empLeaveSearch)
+                          .filter(l => allLeavesTypeFilter === "ALL" || l.leave_type === allLeavesTypeFilter)
+                          .filter(l => allLeavesStatusFilter === "ALL" || l.status === allLeavesStatusFilter)
+                          // ✨ กรองด้วยวันที่ลา
+                          .filter(l => !leaveSearchDate || (l.start_date && l.start_date.split('T')[0] === leaveSearchDate))
+                          .map(l => (
+                           <tr key={l.id} className="bg-white shadow-sm hover:shadow-md transition-all border border-slate-50 group">
+                              
+                              {/* 1. วันที่ยื่นเรื่อง */}
+                              <td className="p-4 text-sm font-bold text-slate-400 rounded-l-xl whitespace-nowrap">
+                                {new Date(l.created_at).toLocaleDateString(lang==='TH'?'th-TH':'en-US')} <br/>
+                                <span className="text-[10px]">{new Date(l.created_at).toLocaleTimeString('th-TH').slice(0,5)} น.</span>
+                              </td>
+                              
+                              {/* 2. ชื่อพนักงาน */}
+                              <td className="p-4 text-sm font-black text-slate-800 whitespace-nowrap">{l.employees?.full_name || 'ไม่ทราบชื่อ'}</td>
+                              
+                              {/* 3. วันที่ขอหยุด (Highlight) */}
+                              <td className="p-4 whitespace-nowrap">
+                                <div className="flex flex-col gap-1">
+                                  <span className="bg-pink-50 text-pink-600 px-3 py-1.5 rounded-lg font-black text-xs border border-pink-100">
+                                    เริ่ม: {l.start_date ? new Date(l.start_date).toLocaleDateString(lang==='TH'?'th-TH':'en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}
+                                  </span>
+                                  <span className="bg-slate-50 text-slate-500 px-3 py-1 rounded-lg font-bold text-xs border border-slate-100">
+                                    ถึง: {l.end_date ? new Date(l.end_date).toLocaleDateString(lang==='TH'?'th-TH':'en-US', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}
+                                  </span>
+                                </div>
+                              </td>
+
+                              {/* 4. ประเภท/ระยะเวลา */}
+                              <td className="p-4 whitespace-nowrap">
+                                <span className="font-black text-indigo-600 block text-sm">{getTranslatedType(l.leave_type)}</span>
+                                <span className="text-xs text-slate-400 font-bold">{formatDuration(l.duration_minutes)}</span>
+                              </td>
+
+                              {/* 5. เหตุผล */}
+                              <td className="p-4 text-xs font-medium text-slate-600">
+                                <div className="line-clamp-2 hover:line-clamp-none transition-all">{l.reason || '-'}</div>
+                              </td>
+
+                              {/* 6. พิกัด */}
+                              <td className="p-4 text-center whitespace-nowrap">
+                                {(l.lat && l.lng) ? (
+                                  <button 
+                                    onClick={() => setViewMapModal({ lat: l.lat, lng: l.lng, name: l.employees?.full_name })}
+                                    className="inline-flex items-center gap-1.5 bg-indigo-50 border border-indigo-100 text-indigo-600 px-3 py-2 rounded-xl text-[11px] font-black hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
+                                  >
+                                    📍 {t.btnViewMap}
+                                  </button>
+                                ) : (
+                                  <span className="text-slate-300 text-[10px] font-bold">{t.noLocation}</span>
+                                )}
+                              </td>
+
+                              {/* 7. สถานะ */}
+                              <td className="p-4 text-right whitespace-nowrap">
+                                <span className={`text-[10px] px-3 py-1.5 rounded-full font-black ${l.status==='อนุมัติ'?'bg-emerald-100 text-emerald-600':l.status==='รออนุมัติ'?'bg-amber-100 text-amber-600':'bg-rose-100 text-rose-600'}`}>
+                                  {getTranslatedStatus(l.status)}
+                                </span>
+                              </td>
+
+                              {/* 8. รายละเอียด (ปุ่มจัดการ) */}
+                              <td className="p-4 text-center rounded-r-xl whitespace-nowrap">
+                                <button 
+                                  onClick={() => {
+                                    Swal.fire({
+                                      title: '<span class="font-black text-slate-800">รายละเอียดคำขอลา</span>',
+                                      html: `
+                                        <div class="text-left space-y-4 p-2 font-sans">
+                                          
+                                          <div class="bg-indigo-600 p-4 rounded-2xl shadow-md text-white text-center">
+                                            <p class="text-[10px] font-black text-indigo-200 uppercase tracking-widest mb-1">📅 วันที่ต้องการลาหยุด (Leave Dates)</p>
+                                            <p class="text-[16px] font-black">
+                                              ${l.start_date ? new Date(l.start_date).toLocaleDateString('th-TH', { day: '2-digit', month: 'short', year: 'numeric' }) : 'ไม่ระบุ'} 
+                                              ถึง 
+                                              ${l.end_date ? new Date(l.end_date).toLocaleDateString('th-TH', { day: '2-digit', month: 'short', year: 'numeric' }) : 'ไม่ระบุ'}
+                                            </p>
+                                          </div>
+
+                                          <div class="bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                            <p class="text-[10px] font-black text-slate-400 uppercase mb-1">เหตุผลการลา / หมายเหตุ</p>
+                                            <p class="text-sm font-bold text-slate-600 leading-relaxed">${l.reason || l.remarks || 'ไม่ได้ระบุเหตุผล'}</p>
+                                          </div>
+
+                                          ${l.medical_cert_url ? `
+                                            <div class="bg-blue-50 p-3 rounded-xl border border-blue-100 flex items-center justify-between">
+                                              <div>
+                                                <p class="text-[10px] font-black text-blue-400 uppercase mb-1">เอกสารแนบ</p>
+                                                <p class="text-xs font-bold text-blue-600">มีเอกสารประกอบการลา</p>
+                                              </div>
+                                              <button type="button" id="btn-preview-doc-${l.id}" class="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-black hover:bg-blue-700 transition-all shadow-sm flex items-center gap-1">
+                                                เปิดดู 🔍
+                                              </button>
+                                            </div>
+                                          ` : `
+                                            <div class="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                                              <p class="text-[10px] font-black text-slate-400 uppercase mb-1">เอกสารแนบ</p>
+                                              <p class="text-xs font-bold text-slate-400">- ไม่มีเอกสารแนบ -</p>
+                                            </div>
+                                          `}
+                                          
+                                          <div class="bg-slate-50 p-3 rounded-xl border border-slate-100 flex justify-between items-center">
+                                             <div>
+                                               <p class="text-[10px] font-black text-slate-400 uppercase mb-1">กดยื่นคำขอเมื่อ</p>
+                                               <p class="text-xs font-bold text-slate-600">
+                                                 ${new Date(l.created_at).toLocaleDateString('th-TH', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                               </p>
+                                             </div>
+                                             <div>
+                                                <p class="text-[10px] font-black text-slate-400 uppercase mb-1 text-right">ระยะเวลารวม</p>
+                                                <p class="text-xs font-black text-pink-600 text-right">${formatDuration(l.duration_minutes)}</p>
+                                             </div>
+                                          </div>
+
+                                          ${l.status === 'ไม่อนุมัติ' && l.reject_reason ? `
+                                            <div class="bg-rose-50 p-3 rounded-xl border border-rose-100 mt-2">
+                                              <p class="text-[10px] font-black text-rose-400 uppercase mb-1">เหตุผลที่ไม่อนุมัติ</p>
+                                              <p class="text-sm font-bold text-rose-600">${l.reject_reason}</p>
+                                            </div>
+                                          ` : ''}
+                                        </div>
+                                      `,
+                                      confirmButtonText: 'ปิดหน้าต่าง',
+                                      confirmButtonColor: '#4F46E5',
+                                      customClass: { popup: 'rounded-[2rem]' },
+                                      didOpen: () => {
+                                        const btnPreview = document.getElementById(`btn-preview-doc-${l.id}`);
+                                        if (btnPreview) {
+                                          btnPreview.addEventListener('click', () => {
+                                            const fileUrl = l.medical_cert_url || '';
+                                            const isPdf = fileUrl.toLowerCase().includes('.pdf');
+                                            
+                                            if (isPdf) {
+                                              Swal.fire({
+                                                title: '<span class="font-black text-slate-800">📄 เอกสารประกอบการลา</span>',
+                                                html: '<div class="w-full h-[65vh] bg-slate-100 rounded-xl overflow-hidden border border-slate-200 mt-2"><iframe src="' + fileUrl + '" class="w-full h-full border-none"></iframe></div>',
+                                                width: '800px',
+                                                showCloseButton: true,
+                                                confirmButtonText: 'ปิด',
+                                                confirmButtonColor: '#ec4899',
+                                                customClass: { popup: 'rounded-[2rem]' }
+                                              });
+                                            } else {
+                                              Swal.fire({
+                                                title: '<span class="font-black text-slate-800">📄 รูปภาพประกอบการลา</span>',
+                                                html: `
+                                                  <div class="text-xs text-slate-500 mb-3 font-bold flex items-center justify-center gap-1">
+                                                    🖱️ เลื่อนลูกกลิ้งเมาส์เพื่อซูม <span class="mx-1">•</span> คลิกค้างเพื่อลากดู
+                                                  </div>
+                                                  <div class="flex justify-center w-full">
+                                                    <div id="zoom-container" class="w-fit max-w-full mx-auto relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm flex items-center justify-center">
+                                                      <img id="zoomable-img" src="${fileUrl}" class="max-w-full max-h-[65vh] select-none pointer-events-none" style="transform-origin: center center;" alt="เอกสาร" draggable="false" />
+                                                      <button id="btn-reset-zoom" class="absolute bottom-4 right-4 bg-slate-800/70 hover:bg-slate-900 backdrop-blur-md text-white px-4 py-2 rounded-xl text-xs font-black transition-all shadow-lg border border-white/20 hidden">
+                                                        คืนค่าเดิม 🔄
+                                                      </button>
+                                                    </div>
+                                                  </div>
+                                                `,
+                                                width: '800px',
+                                                showCloseButton: true,
+                                                confirmButtonText: 'ปิด',
+                                                confirmButtonColor: '#ec4899',
+                                                customClass: { popup: 'rounded-[2rem]' },
+                                                didOpen: () => {
+                                                  const container = document.getElementById('zoom-container');
+                                                  const img = document.getElementById('zoomable-img');
+                                                  const resetBtn = document.getElementById('btn-reset-zoom');
+                                                  
+                                                  let scale = 1;
+                                                  let pointX = 0;
+                                                  let pointY = 0;
+                                                  let isDragging = false;
+                                                  let originX = 0;
+                                                  let originY = 0;
+                                                  let startX = 0;
+                                                  let startY = 0;
+
+                                                  const clamp = (val, min, max) => Math.min(Math.max(val, min), max);
+
+                                                  const updateTransform = (smooth = false) => {
+                                                    if (!img || !container) return;
+                                                    
+                                                    if (scale <= 1) {
+                                                      scale = 1;
+                                                      pointX = 0;
+                                                      pointY = 0;
+                                                    } else {
+                                                      const rect = container.getBoundingClientRect();
+                                                      const maxOffsetX = (rect.width * scale - rect.width) / 2;
+                                                      const maxOffsetY = (rect.height * scale - rect.height) / 2;
+                                                      
+                                                      pointX = clamp(pointX, -maxOffsetX, maxOffsetX);
+                                                      pointY = clamp(pointY, -maxOffsetY, maxOffsetY);
+                                                    }
+
+                                                    img.style.transition = smooth ? 'transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1)' : 'none';
+                                                    img.style.transform = `translate(${pointX}px, ${pointY}px) scale(${scale})`;
+                                                    
+                                                    if (resetBtn) {
+                                                      resetBtn.style.display = scale > 1 ? 'block' : 'none';
+                                                    }
+                                                    
+                                                    container.style.cursor = scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default';
+                                                  };
+
+                                                  if (container) {
+                                                    container.addEventListener('mousedown', (e) => {
+                                                      if (scale <= 1) return;
+                                                      e.preventDefault();
+                                                      isDragging = true;
+                                                      originX = e.clientX;
+                                                      originY = e.clientY;
+                                                      startX = pointX;
+                                                      startY = pointY;
+                                                      container.style.cursor = 'grabbing';
+                                                    });
+
+                                                    const stopDrag = () => { 
+                                                      if (isDragging) {
+                                                        isDragging = false; 
+                                                        updateTransform(true);
+                                                      }
+                                                    };
+                                                    window.addEventListener('mouseup', stopDrag);
+                                                    
+                                                    window.addEventListener('mousemove', (e) => {
+                                                      if (!isDragging || scale <= 1) return;
+                                                      e.preventDefault();
+                                                      pointX = startX + (e.clientX - originX);
+                                                      pointY = startY + (e.clientY - originY);
+                                                      updateTransform(false);
+                                                    });
+
+                                                    container.addEventListener('wheel', (e) => {
+                                                      e.preventDefault();
+                                                      const delta = e.deltaY || e.detail || e.wheelDelta;
+                                                      const zoomFactor = 0.3; 
+                                                      
+                                                      if (delta < 0) scale += zoomFactor; 
+                                                      else scale -= zoomFactor; 
+                                                      
+                                                      scale = clamp(scale, 1, 5);
+                                                      updateTransform(true);
+                                                    });
+                                                  }
+
+                                                  if (resetBtn) {
+                                                    resetBtn.onclick = () => {
+                                                      scale = 1; pointX = 0; pointY = 0;
+                                                      updateTransform(true);
+                                                    };
+                                                  }
+                                                }
+                                              });
+                                            }
+                                          });
+                                        }
+                                      }
+                                    });
+                                  }}
+                                  className="bg-slate-100 hover:bg-indigo-500 text-slate-600 hover:text-white px-3 py-2 rounded-xl text-[11px] font-black transition-all shadow-sm flex items-center justify-center gap-1.5 mx-auto group-hover:scale-110"
+                                >
+                                  🔍 <span className="hidden md:inline">ตรวจสอบ</span>
+                                </button>
+                              </td>
+                           </tr>
+                        ))
+                      )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+{/* ========================================================================= */}
+      {/* 🏖️ VIEW: ALL DAY OFFS (รายการแจ้งหยุดทั้งหมด - กรองชื่อด้วย Dropdown + ค้นหาวันที่) */}
+      {/* ========================================================================= */}
+        {currentView === "settings_all_dayoffs" && (user?.role === 'admin' || user?.role === 'ceo') && (
           <div className="px-4 md:px-8 pb-8 z-10 flex-1 flex flex-col w-full mt-4 animate-fade-in">
             <div className="bg-white/80 backdrop-blur-xl rounded-[2rem] p-6 md:p-8 shadow-sm border border-white flex-1 flex flex-col">
               
-              <div className="mb-6 border-b border-slate-100 pb-6">
-                <h3 className="font-black text-slate-800 text-xl flex items-center gap-2 mb-4">🗂️ {t.settingsAllLeaves}</h3>
-                <p className="text-sm text-slate-500 font-medium mb-4">{t.allLeavesDesc}</p>
-                
-                {(() => {
-                  const pendingLeaves = allEmpLeaves?.filter(l => l.status === 'รออนุมัติ') || [];
-                  const approvedLeaves = allEmpLeaves?.filter(l => l.status === 'อนุมัติ') || [];
+              <div className="mb-6 border-b border-slate-100 pb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                <div>
+                  <h3 className="font-black text-slate-800 text-xl flex items-center gap-2">🏖️ {t.settingsAllDayOffs}</h3>
+                  <p className="text-sm text-slate-500 font-medium mt-1">{t.ptDayOffDesc}</p>
+                </div>
+              </div>
 
-                  if (pendingLeaves.length === 0) return null;
+              {/* ✨ AI DAY OFF PREDICTOR (ระบบวิเคราะห์วันหยุดชนกัน) */}
+              {(() => {
+                const dayOffTypes = ['วันหยุดประจำสัปดาห์ (PT)', 'Weekly Day Off (PT)'];
+                const pendingDayOffs = allEmpLeaves?.filter(l => l.status === 'รออนุมัติ' && dayOffTypes.includes(l.leave_type)) || [];
+                const approvedDayOffs = allEmpLeaves?.filter(l => l.status === 'อนุมัติ' && dayOffTypes.includes(l.leave_type)) || [];
 
-                  const warnings = [];
+                if (pendingDayOffs.length === 0) return null;
 
-                  pendingLeaves.forEach(pending => {
-                    if(!pending.start_date || !pending.end_date) return;
-                    
-                    const overlappingLeaves = approvedLeaves.filter(app => {
-                      if(!app.start_date || !app.end_date) return false;
-                      return (pending.start_date <= app.end_date) && (pending.end_date >= app.start_date);
-                    });
+                const warnings = [];
 
-                    if (overlappingLeaves.length > 0) {
-                      const overlapNames = overlappingLeaves.map(o => o.employees?.full_name || 'ไม่ทราบชื่อ').join(', ');
-                      warnings.push(`คุณ ${pending.employees?.full_name} 🗓️ ขอลาตรงกับ: ${overlapNames} (โปรดระวังกำลังคนไม่พอ)`);
-                    }
+                pendingDayOffs.forEach(pending => {
+                  if(!pending.start_date) return;
+                  
+                  const overlappingDayOffs = approvedDayOffs.filter(app => {
+                    if(!app.start_date) return false;
+                    const pStart = pending.start_date.split('T')[0];
+                    const aStart = app.start_date.split('T')[0];
+                    return pStart === aStart;
                   });
 
-                  if (warnings.length === 0) return (
-                    <div className="mb-4 relative z-10 animate-fade-in">
-                      <div className="p-4 rounded-[1.5rem] border bg-emerald-50 border-emerald-200 shadow-sm flex items-center gap-3">
-                        <span className="text-xl">✅</span>
-                        <h4 className="font-black text-sm text-emerald-600">
-                          AI Predictor: คำขอลาที่รออนุมัติ ไม่มีคิวชนกับพนักงานคนอื่น สามารถอนุมัติได้ปลอดภัยครับ
+                  if (overlappingDayOffs.length > 0) {
+                    const overlapNames = overlappingDayOffs.map(o => o.employees?.full_name || 'ไม่ทราบชื่อ').join(', ');
+                    warnings.push(`คุณ ${pending.employees?.full_name} 🗓️ ขอหยุดตรงกับ: ${overlapNames} (โปรดพิจารณาความเหมาะสมของกำลังคน)`);
+                  }
+                });
+
+                if (warnings.length === 0) return (
+                  <div className="mb-6 relative z-10 animate-fade-in">
+                    <div className="p-4 rounded-[1.5rem] border bg-emerald-50 border-emerald-200 shadow-sm flex items-center gap-3">
+                      <span className="text-xl">✅</span>
+                      <h4 className="font-black text-sm text-emerald-600">
+                        AI Predictor: คำขอหยุดประจำสัปดาห์ที่รออนุมัติ ไม่มีคิวชนกับพนักงานคนอื่น สามารถอนุมัติได้เลยครับ
+                      </h4>
+                    </div>
+                  </div>
+                );
+
+                return (
+                  <div className="mb-6 relative z-10 animate-fade-in">
+                    <div className="p-5 rounded-[1.5rem] border bg-amber-50 border-amber-200 shadow-sm">
+                      <div className="flex items-center gap-3 mb-3">
+                        <span className="text-xl animate-pulse">🤖</span>
+                        <h4 className="font-black text-sm uppercase tracking-wider text-amber-600">
+                          AI Day Off Alert: พบการขอหยุดวันเดียวกัน {warnings.length} รายการ
                         </h4>
                       </div>
-                    </div>
-                  );
-
-                  return (
-                    <div className="mb-4 relative z-10 animate-fade-in">
-                      <div className="p-5 rounded-[1.5rem] border bg-amber-50 border-amber-200 shadow-sm">
-                        <div className="flex items-center gap-3 mb-3">
-                          <span className="text-xl animate-pulse">🤖</span>
-                          <h4 className="font-black text-sm uppercase tracking-wider text-amber-600">
-                            AI Leave Alert: พบการขอลาหยุดตรงกัน {warnings.length} รายการ
-                          </h4>
-                        </div>
-                        <div className="space-y-2">
-                          {warnings.map((warn, i) => (
-                            <p key={i} className="text-xs font-bold text-amber-700 flex items-center gap-2 bg-white p-2.5 rounded-xl border border-amber-100 shadow-sm">
-                              <span className="w-1.5 h-1.5 bg-amber-500 rounded-full"></span> ⚠️ {warn}
-                            </p>
-                          ))}
-                        </div>
+                      <div className="space-y-2">
+                        {warnings.map((warn, i) => (
+                          <p key={i} className="text-xs font-bold text-amber-700 flex items-center gap-2 bg-white p-2.5 rounded-xl border border-amber-100 shadow-sm">
+                            <span className="w-1.5 h-1.5 bg-amber-500 rounded-full"></span> ⚠️ {warn}
+                          </p>
+                        ))}
                       </div>
                     </div>
-                  );
-                })()}
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-xs">👤</span>
-                    <select 
-                      value={empLeaveSearch} 
-                      onChange={(e) => setEmpLeaveSearch(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold outline-none text-sm shadow-inner focus:border-indigo-400 cursor-pointer appearance-none text-slate-700"
-                    >
-                      <option value="">{t.allLeavesFilterAll}</option>
-                      {employees && employees.length > 0 ? (
-                        employees.map(emp => (
-                          <option key={emp.id} value={emp.full_name}>
-                            {lang === 'TH' ? `คุณ ${emp.full_name}` : emp.full_name}
-                          </option>
-                        ))
-                      ) : (
-                        <option value="" disabled>กำลังโหลดข้อมูล...</option>
-                      )}
-                    </select>
-                    <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400 text-[10px]">▼</div>
                   </div>
+                );
+              })()}
 
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-xs">🔖</span>
-                    <select 
-                      value={allLeavesTypeFilter} 
-                      onChange={(e) => setAllLeavesTypeFilter(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold outline-none text-sm shadow-inner focus:border-indigo-400 cursor-pointer appearance-none text-slate-700"
-                    >
-                      <option value="ALL">{t.allTypes}</option>
-                      <option value="ลาป่วย">{t.sickLeave}</option>
-                      <option value="ลากิจ">{t.personalLeave}</option>
-                      <option value="ลาพักร้อน">{t.annualLeave}</option>
-                      <option value="ลาฉุกเฉิน">{t.emergencyLeave}</option>
-                      <option value="ลาไม่รับเงินเดือน">{lang === 'TH' ? 'ลาไม่รับเงินเดือน' : 'Leave Without Pay'}</option>
-                    </select>
-                    <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400 text-[10px]">▼</div>
-                  </div>
+              {/* ✨ 🚀 แถบค้นหาข้อมูล 3 ช่อง: ชื่อ | วันที่ | สถานะ (ล็อกขนาดกันทะลักจอ) */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6 w-full">
+                
+                {/* 1. ค้นหาชื่อพนักงาน */}
+                <div className="relative min-w-0 w-full">
+                  <span className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-xs">👤</span>
+                  <select 
+                    value={dayoffSearchName} 
+                    onChange={(e) => setDayoffSearchName(e.target.value)}
+                    className="w-full max-w-full box-border min-w-0 bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold outline-none text-sm shadow-inner focus:border-indigo-400 cursor-pointer appearance-none text-slate-700 m-0 block"
+                  >
+                    <option value="">{t.allLeavesFilterAll}</option>
+                    {employees && employees.length > 0 ? (
+                      employees.map(emp => (
+                        <option key={emp.id} value={emp.full_name}>
+                          {lang === 'TH' ? `คุณ ${emp.full_name}` : emp.full_name}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="" disabled>กำลังโหลดข้อมูล...</option>
+                    )}
+                  </select>
+                  <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400 text-[10px]">▼</div>
+                </div>
 
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-xs">⚖️</span>
-                    <select 
-                      value={allLeavesStatusFilter} 
-                      onChange={(e) => setAllLeavesStatusFilter(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold outline-none text-sm shadow-inner focus:border-indigo-400 cursor-pointer appearance-none text-slate-700"
+                {/* 2. 🚀 ช่องค้นหา "วันที่ขอหยุด" */}
+                <div className="relative min-w-0 w-full overflow-hidden rounded-xl">
+                  <span className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-xs z-10">📅</span>
+                  <input 
+                    type="date"
+                    value={dayoffSearchDate || ''}
+                    onChange={(e) => setDayoffSearchDate(e.target.value)}
+                    className="w-full max-w-full box-border min-w-0 bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-8 py-2.5 font-bold outline-none text-sm shadow-inner focus:border-indigo-400 cursor-pointer text-slate-700 m-0 block appearance-none"
+                  />
+                  {/* ปุ่ม X สำหรับเคลียร์วันที่ */}
+                  {dayoffSearchDate && (
+                    <button 
+                      onClick={() => setDayoffSearchDate("")} 
+                      className="absolute inset-y-0 right-3 flex items-center text-slate-400 hover:text-rose-500 font-bold z-10 bg-slate-50 pl-2"
                     >
-                      <option value="ALL">{t.allStatus}</option>
-                      <option value="รออนุมัติ">{t.pending}</option>
-                      <option value="อนุมัติ">{t.approved}</option>
-                      <option value="ไม่อนุมัติ">{t.rejected}</option>
-                    </select>
-                    <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400 text-[10px]">▼</div>
-                  </div>
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {/* 3. ค้นหาสถานะ */}
+                <div className="relative min-w-0 w-full">
+                  <span className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-xs">⚖️</span>
+                  <select 
+                    value={dayoffFilterStatus} 
+                    onChange={(e) => setDayoffFilterStatus(e.target.value)}
+                    className="w-full max-w-full box-border min-w-0 bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold outline-none text-sm shadow-inner focus:border-indigo-400 cursor-pointer appearance-none text-slate-700 m-0 block"
+                  >
+                    <option value="ALL">{t.allStatus}</option>
+                    <option value="รออนุมัติ">{t.pending}</option>
+                    <option value="อนุมัติ">{t.approved}</option>
+                    <option value="ไม่อนุมัติ">{t.rejected}</option>
+                  </select>
+                  <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400 text-[10px]">▼</div>
                 </div>
               </div>
 
             <div className="flex-1 overflow-x-auto overflow-y-auto w-full custom-scrollbar pr-2">
-              <table className="w-full text-left border-separate border-spacing-y-2 min-w-[1000px]">
-                <thead className="text-xs text-slate-400 uppercase bg-slate-50 sticky top-0 z-10">
+              <table className="w-full text-left border-separate border-spacing-y-2 min-w-[900px]">
+                <thead className="text-xs text-slate-400 uppercase bg-slate-50 sticky top-0 z-10 shadow-sm">
                   <tr>
                     <th className="p-4 rounded-l-xl">{t.thDate}</th>
                     <th className="p-4">{t.thEmp}</th>
-                    <th className="p-4">{t.thTypeDuration}</th>
+                    <th className="p-4 text-purple-600">📅 {t.thDayOffDate}</th>
                     <th className="p-4 w-1/4">{t.thReason}</th>
                     <th className="p-4 text-center">{t.thLocation}</th>
                     <th className="p-4 text-right">{t.thStatus}</th>
@@ -11407,26 +12986,31 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                 </thead>
                 <tbody>
                   {allEmpLeaves
-                    .filter(l => !empLeaveSearch || l.employees?.full_name === empLeaveSearch)
-                    .filter(l => allLeavesTypeFilter === "ALL" || l.leave_type === allLeavesTypeFilter)
-                    .filter(l => allLeavesStatusFilter === "ALL" || l.status === allLeavesStatusFilter)
+                    .filter(l => l.leave_type === 'วันหยุดประจำสัปดาห์ (PT)' || l.leave_type === 'Weekly Day Off (PT)')
+                    .filter(l => !dayoffSearchName || l.employees?.full_name === dayoffSearchName)
+                    .filter(l => dayoffFilterStatus === "ALL" || l.status === dayoffFilterStatus)
+                    // ✨ 🚀 เพิ่มลอจิกเช็ควันที่ค้นหาตรงนี้
+                    .filter(l => !dayoffSearchDate || (l.start_date && l.start_date.split('T')[0] === dayoffSearchDate))
                     .length === 0 ? (
                       <tr><td colSpan="7" className="text-center py-10 text-slate-400 font-bold bg-slate-50 rounded-xl">{t.noLeaveHistory}</td></tr>
                     ) : (
                       allEmpLeaves
-                        .filter(l => !empLeaveSearch || l.employees?.full_name === empLeaveSearch)
-                        .filter(l => allLeavesTypeFilter === "ALL" || l.leave_type === allLeavesTypeFilter)
-                        .filter(l => allLeavesStatusFilter === "ALL" || l.status === allLeavesStatusFilter)
+                        .filter(l => l.leave_type === 'วันหยุดประจำสัปดาห์ (PT)' || l.leave_type === 'Weekly Day Off (PT)')
+                        .filter(l => !dayoffSearchName || l.employees?.full_name === dayoffSearchName)
+                        .filter(l => dayoffFilterStatus === "ALL" || l.status === dayoffFilterStatus)
+                        // ✨ 🚀 และเพิ่มลอจิกเช็ควันที่ค้นหาตรงนี้ให้ครบด้วย
+                        .filter(l => !dayoffSearchDate || (l.start_date && l.start_date.split('T')[0] === dayoffSearchDate))
                         .map(l => (
                          <tr key={l.id} className="bg-white shadow-sm hover:shadow-md transition-all border border-slate-50 group">
-                            <td className="p-4 text-sm font-bold text-slate-500 rounded-l-xl whitespace-nowrap">
+                            <td className="p-4 text-sm font-bold text-slate-400 rounded-l-xl whitespace-nowrap">
                               {new Date(l.created_at).toLocaleDateString(lang==='TH'?'th-TH':'en-US')} <br/>
-                              <span className="text-[10px] text-slate-400">{new Date(l.created_at).toLocaleTimeString('th-TH').slice(0,5)} น.</span>
+                              <span className="text-[10px]">{new Date(l.created_at).toLocaleTimeString('th-TH').slice(0,5)} น.</span>
                             </td>
                             <td className="p-4 text-sm font-black text-slate-800 whitespace-nowrap">{l.employees?.full_name || 'ไม่ทราบชื่อ'}</td>
                             <td className="p-4 whitespace-nowrap">
-                              <span className="font-black text-pink-600 block text-sm">{getTranslatedType(l.leave_type)}</span>
-                              <span className="text-xs text-slate-400 font-bold">{formatDuration(l.duration_minutes)}</span>
+                              <span className="bg-purple-100 text-purple-700 px-3 py-1.5 rounded-lg font-black text-sm border border-purple-200">
+                                {new Date(l.start_date).toLocaleDateString(lang==='TH'?'th-TH':'en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
+                              </span>
                             </td>
                             <td className="p-4 text-xs font-medium text-slate-600">
                               <div className="line-clamp-2 hover:line-clamp-none transition-all">{l.reason || '-'}</div>
@@ -11444,7 +13028,7 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                               )}
                             </td>
                             <td className="p-4 text-right whitespace-nowrap">
-                              <span className={`text-[10px] px-3 py-1.5 rounded-full font-black ${l.status==='อนุมัติ'?'bg-emerald-100 text-emerald-600':l.status==='รออนุมัติ'?'bg-amber-100 text-amber-600':'bg-rose-100 text-rose-600'}`}>
+                              <span className={`text-[11px] px-3 py-1.5 rounded-full font-black ${l.status==='อนุมัติ'?'bg-emerald-100 text-emerald-600':l.status==='รออนุมัติ'?'bg-amber-100 text-amber-600':'bg-rose-100 text-rose-600'}`}>
                                 {getTranslatedStatus(l.status)}
                               </span>
                             </td>
@@ -11452,54 +13036,28 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                               <button 
                                 onClick={() => {
                                   Swal.fire({
-                                    title: '<span class="font-black text-slate-800">รายละเอียดคำขอลา</span>',
+                                    title: '<span class="font-black text-slate-800">รายละเอียดคำขอหยุด</span>',
                                     html: `
                                       <div class="text-left space-y-4 p-2 font-sans">
-                                        
-                                        <div class="bg-indigo-600 p-4 rounded-2xl shadow-md text-white text-center">
-                                          <p class="text-[10px] font-black text-indigo-200 uppercase tracking-widest mb-1">📅 วันที่ต้องการลาหยุด (Leave Dates)</p>
+                                        <div class="bg-purple-600 p-4 rounded-2xl shadow-md text-white text-center border border-purple-700">
+                                          <p class="text-[10px] font-black text-purple-200 uppercase tracking-widest mb-1">📅 วันที่ต้องการหยุด</p>
                                           <p class="text-[16px] font-black">
-                                            ${l.start_date ? new Date(l.start_date).toLocaleDateString('th-TH', { day: '2-digit', month: 'short', year: 'numeric' }) : 'ไม่ระบุ'} 
-                                            ถึง 
-                                            ${l.end_date ? new Date(l.end_date).toLocaleDateString('th-TH', { day: '2-digit', month: 'short', year: 'numeric' }) : 'ไม่ระบุ'}
+                                            ${l.start_date ? new Date(l.start_date).toLocaleDateString('th-TH', { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' }) : 'ไม่ระบุ'} 
                                           </p>
                                         </div>
-
                                         <div class="bg-slate-50 p-4 rounded-xl border border-slate-100">
-                                          <p class="text-[10px] font-black text-slate-400 uppercase mb-1">เหตุผลการลา / หมายเหตุ</p>
+                                          <p class="text-[10px] font-black text-slate-400 uppercase mb-1">เหตุผล / หมายเหตุ</p>
                                           <p class="text-sm font-bold text-slate-600 leading-relaxed">${l.reason || l.remarks || 'ไม่ได้ระบุเหตุผล'}</p>
                                         </div>
-
-                                        ${l.medical_cert_url ? `
-                                          <div class="bg-blue-50 p-3 rounded-xl border border-blue-100 flex items-center justify-between">
-                                            <div>
-                                              <p class="text-[10px] font-black text-blue-400 uppercase mb-1">เอกสารแนบ</p>
-                                              <p class="text-xs font-bold text-blue-600">มีเอกสารประกอบการลา</p>
-                                            </div>
-                                            <button type="button" id="btn-preview-doc-${l.id}" class="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-xs font-black hover:bg-blue-700 transition-all shadow-sm flex items-center gap-1">
-                                              เปิดดู 🔍
-                                            </button>
-                                          </div>
-                                        ` : `
-                                          <div class="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                                            <p class="text-[10px] font-black text-slate-400 uppercase mb-1">เอกสารแนบ</p>
-                                            <p class="text-xs font-bold text-slate-400">- ไม่มีเอกสารแนบ -</p>
-                                          </div>
-                                        `}
-                                        
                                         <div class="bg-slate-50 p-3 rounded-xl border border-slate-100 flex justify-between items-center">
                                            <div>
                                              <p class="text-[10px] font-black text-slate-400 uppercase mb-1">กดยื่นคำขอเมื่อ</p>
                                              <p class="text-xs font-bold text-slate-600">
                                                ${new Date(l.created_at).toLocaleDateString('th-TH', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                               เวลา ${new Date(l.created_at).toLocaleTimeString('th-TH').slice(0,5)} น.
                                              </p>
                                            </div>
-                                           <div>
-                                              <p class="text-[10px] font-black text-slate-400 uppercase mb-1 text-right">ระยะเวลารวม</p>
-                                              <p class="text-xs font-black text-pink-600 text-right">${formatDuration(l.duration_minutes)}</p>
-                                           </div>
                                         </div>
-
                                         ${l.status === 'ไม่อนุมัติ' && l.reject_reason ? `
                                           <div class="bg-rose-50 p-3 rounded-xl border border-rose-100 mt-2">
                                             <p class="text-[10px] font-black text-rose-400 uppercase mb-1">เหตุผลที่ไม่อนุมัติ</p>
@@ -11509,260 +13067,14 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                                       </div>
                                     `,
                                     confirmButtonText: 'ปิดหน้าต่าง',
-                                    confirmButtonColor: '#4F46E5',
-                                    customClass: { popup: 'rounded-[2rem]' },
-                                    didOpen: () => {
-                                      const btnPreview = document.getElementById(`btn-preview-doc-${l.id}`);
-                                      if (btnPreview) {
-                                        btnPreview.addEventListener('click', () => {
-                                          const fileUrl = l.medical_cert_url || '';
-                                          const isPdf = fileUrl.toLowerCase().includes('.pdf');
-                                          
-                                          if (isPdf) {
-                                            Swal.fire({
-                                              title: '<span class="font-black text-slate-800">📄 เอกสารประกอบการลา</span>',
-                                              html: '<div class="w-full h-[65vh] bg-slate-100 rounded-xl overflow-hidden border border-slate-200 mt-2"><iframe src="' + fileUrl + '" class="w-full h-full border-none"></iframe></div>',
-                                              width: '800px',
-                                              showCloseButton: true,
-                                              confirmButtonText: 'ปิด',
-                                              confirmButtonColor: '#ec4899',
-                                              customClass: { popup: 'rounded-[2rem]' }
-                                            });
-                                          } else {
-                                            Swal.fire({
-                                              title: '<span class="font-black text-slate-800">📄 รูปภาพประกอบการลา</span>',
-                                              html: `
-                                                <div class="text-xs text-slate-500 mb-3 font-bold flex items-center justify-center gap-1">
-                                                  🖱️ เลื่อนลูกกลิ้งเมาส์เพื่อซูม <span class="mx-1">•</span> คลิกค้างเพื่อลากดู
-                                                </div>
-                                                <div class="flex justify-center w-full">
-                                                  <div id="zoom-container" class="w-fit max-w-full mx-auto relative overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm flex items-center justify-center">
-                                                    <img id="zoomable-img" src="${fileUrl}" class="max-w-full max-h-[65vh] select-none pointer-events-none" style="transform-origin: center center;" alt="เอกสาร" draggable="false" />
-                                                    <button id="btn-reset-zoom" class="absolute bottom-4 right-4 bg-slate-800/70 hover:bg-slate-900 backdrop-blur-md text-white px-4 py-2 rounded-xl text-xs font-black transition-all shadow-lg border border-white/20 hidden">
-                                                      คืนค่าเดิม 🔄
-                                                    </button>
-                                                  </div>
-                                                </div>
-                                              `,
-                                              width: '800px',
-                                              showCloseButton: true,
-                                              confirmButtonText: 'ปิด',
-                                              confirmButtonColor: '#ec4899',
-                                              customClass: { popup: 'rounded-[2rem]' },
-                                              didOpen: () => {
-                                                const container = document.getElementById('zoom-container');
-                                                const img = document.getElementById('zoomable-img');
-                                                const resetBtn = document.getElementById('btn-reset-zoom');
-                                                
-                                                let scale = 1;
-                                                let pointX = 0;
-                                                let pointY = 0;
-                                                let isDragging = false;
-                                                let originX = 0;
-                                                let originY = 0;
-                                                let startX = 0;
-                                                let startY = 0;
-
-                                                const clamp = (val, min, max) => Math.min(Math.max(val, min), max);
-
-                                                const updateTransform = (smooth = false) => {
-                                                  if (!img || !container) return;
-                                                  
-                                                  if (scale <= 1) {
-                                                    scale = 1;
-                                                    pointX = 0;
-                                                    pointY = 0;
-                                                  } else {
-                                                    const rect = container.getBoundingClientRect();
-                                                    const maxOffsetX = (rect.width * scale - rect.width) / 2;
-                                                    const maxOffsetY = (rect.height * scale - rect.height) / 2;
-                                                    
-                                                    pointX = clamp(pointX, -maxOffsetX, maxOffsetX);
-                                                    pointY = clamp(pointY, -maxOffsetY, maxOffsetY);
-                                                  }
-
-                                                  img.style.transition = smooth ? 'transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1)' : 'none';
-                                                  img.style.transform = `translate(${pointX}px, ${pointY}px) scale(${scale})`;
-                                                  
-                                                  if (resetBtn) {
-                                                    resetBtn.style.display = scale > 1 ? 'block' : 'none';
-                                                  }
-                                                  
-                                                  container.style.cursor = scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default';
-                                                };
-
-                                                if (container) {
-                                                  container.addEventListener('mousedown', (e) => {
-                                                    if (scale <= 1) return;
-                                                    e.preventDefault();
-                                                    isDragging = true;
-                                                    originX = e.clientX;
-                                                    originY = e.clientY;
-                                                    startX = pointX;
-                                                    startY = pointY;
-                                                    container.style.cursor = 'grabbing';
-                                                  });
-
-                                                  const stopDrag = () => { 
-                                                    if (isDragging) {
-                                                      isDragging = false; 
-                                                      updateTransform(true);
-                                                    }
-                                                  };
-                                                  window.addEventListener('mouseup', stopDrag);
-                                                  
-                                                  window.addEventListener('mousemove', (e) => {
-                                                    if (!isDragging || scale <= 1) return;
-                                                    e.preventDefault();
-                                                    pointX = startX + (e.clientX - originX);
-                                                    pointY = startY + (e.clientY - originY);
-                                                    updateTransform(false);
-                                                  });
-
-                                                  container.addEventListener('wheel', (e) => {
-                                                    e.preventDefault();
-                                                    const delta = e.deltaY || e.detail || e.wheelDelta;
-                                                    const zoomFactor = 0.3; 
-                                                    
-                                                    if (delta < 0) scale += zoomFactor; 
-                                                    else scale -= zoomFactor; 
-                                                    
-                                                    scale = clamp(scale, 1, 5);
-                                                    updateTransform(true);
-                                                  });
-                                                }
-
-                                                if (resetBtn) {
-                                                  resetBtn.onclick = () => {
-                                                    scale = 1; pointX = 0; pointY = 0;
-                                                    updateTransform(true);
-                                                  };
-                                                }
-                                              }
-                                            });
-                                          }
-                                        });
-                                      }
-                                    }
+                                    confirmButtonColor: '#9333ea',
+                                    customClass: { popup: 'rounded-[2rem]' }
                                   });
                                 }}
-                                className="bg-slate-100 text-slate-600 p-2 rounded-xl hover:bg-pink-500 hover:text-white transition-all shadow-sm border border-slate-200 group-hover:scale-110"
+                                className="bg-slate-100 hover:bg-purple-500 text-slate-600 hover:text-white px-3 py-2 rounded-xl text-[11px] font-black transition-all shadow-sm flex items-center justify-center gap-1.5 mx-auto group-hover:scale-110"
                               >
-                                🔍
+                                🔍 <span className="hidden md:inline">ตรวจสอบ</span>
                               </button>
-                            </td>
-                         </tr>
-                      ))
-                    )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-{/* 🏖️ VIEW: ALL DAY OFFS (รายการแจ้งหยุดทั้งหมด - กรองชื่อด้วย Dropdown) */}
-        {currentView === "settings_all_dayoffs" && (user?.role === 'admin' || user?.role === 'ceo') && (
-          /* ✅ ลบ overflow-hidden ออกที่ div ทั้ง 2 ชั้นนี้ เพื่อให้หน้าจอเลื่อนลงได้ */
-          <div className="px-4 md:px-8 pb-8 z-10 flex-1 flex flex-col w-full mt-4 animate-fade-in">
-            <div className="bg-white/80 backdrop-blur-xl rounded-[2rem] p-6 md:p-8 shadow-sm border border-white flex-1 flex flex-col">
-              
-              <div className="mb-6 border-b border-slate-100 pb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <div>
-                  <h3 className="font-black text-slate-800 text-xl flex items-center gap-2">🏖️ {t.settingsAllDayOffs}</h3>
-                  <p className="text-sm text-slate-500 font-medium mt-1">{t.ptDayOffDesc}</p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
-                {/* 1. เลือกพนักงาน */}
-                <div className="relative">
-                  <span className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-xs">👤</span>
-                  <select 
-                    value={dayoffSearchName} 
-                    onChange={(e) => setDayoffSearchName(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold outline-none text-sm shadow-inner focus:border-indigo-400 cursor-pointer appearance-none text-slate-700"
-                  >
-                    <option value="">{t.allLeavesFilterAll}</option>
-                    {/* ✅ แก้ไข: ดึงชื่อจากตารางพนักงานทั้งหมดมาแสดง (employees) แบบเดียวกับหน้าแจ้งปรับปรุง */}
-                    {employees && employees.length > 0 ? (
-                      employees.map(emp => (
-                        <option key={emp.id} value={emp.full_name}>
-                          {lang === 'TH' ? `คุณ ${emp.full_name}` : emp.full_name}
-                        </option>
-                      ))
-                    ) : (
-                      <option value="" disabled>กำลังโหลดข้อมูล...</option>
-                    )}
-                  </select>
-                  <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400 text-[10px]">▼</div>
-                </div>
-
-                {/* 2. เลือกสถานะ */}
-                <div className="relative">
-                  <span className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-xs">⚖️</span>
-                  <select 
-                    value={dayoffFilterStatus} 
-                    onChange={(e) => setDayoffFilterStatus(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold outline-none text-sm shadow-inner focus:border-indigo-400 cursor-pointer appearance-none text-slate-700"
-                  >
-                    <option value="ALL">{t.allStatus}</option>
-                    <option value="รออนุมัติ">{t.pending}</option>
-                    <option value="อนุมัติ">{t.approved}</option>
-                    <option value="ไม่อนุมัติ">{t.rejected}</option>
-                  </select>
-                  <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none text-slate-400 text-[10px]">▼</div>
-                </div>
-              </div>
-
-            {/* ตารางแสดงข้อมูลการแจ้งหยุด */}
-            <div className="flex-1 overflow-x-auto overflow-y-auto w-full custom-scrollbar pr-2">
-              <table className="w-full text-left border-separate border-spacing-y-2 min-w-[800px]">
-                <thead className="text-xs text-slate-400 uppercase bg-slate-50 sticky top-0 z-10">
-                  <tr>
-                    <th className="p-4 rounded-l-xl">{t.thDate}</th>
-                    <th className="p-4">{t.thEmp}</th>
-                    <th className="p-4 text-purple-600">📅 {t.thDayOffDate}</th>
-                    <th className="p-4 w-1/4">{t.thReason}</th>
-                    <th className="p-4 text-right rounded-r-xl">{t.thStatus}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {allEmpLeaves
-                    .filter(l => l.leave_type === 'วันหยุดประจำสัปดาห์ (PT)' || l.leave_type === 'Weekly Day Off (PT)')
-                    .filter(l => !dayoffSearchName || l.employees?.full_name === dayoffSearchName)
-                    .filter(l => dayoffFilterStatus === "ALL" || l.status === dayoffFilterStatus)
-                    .length === 0 ? (
-                      <tr><td colSpan="5" className="text-center py-10 text-slate-400 font-bold bg-slate-50 rounded-xl">{t.noLeaveHistory}</td></tr>
-                    ) : (
-                      allEmpLeaves
-                        .filter(l => l.leave_type === 'วันหยุดประจำสัปดาห์ (PT)' || l.leave_type === 'Weekly Day Off (PT)')
-                        .filter(l => !dayoffSearchName || l.employees?.full_name === dayoffSearchName)
-                        .filter(l => dayoffFilterStatus === "ALL" || l.status === dayoffFilterStatus)
-                        .map(l => (
-                         <tr key={l.id} className="bg-white shadow-sm hover:shadow-md transition-all border border-slate-50 group">
-                            {/* วันที่ยื่นเรื่อง */}
-                            <td className="p-4 text-sm font-bold text-slate-400 rounded-l-xl whitespace-nowrap">
-                              {new Date(l.created_at).toLocaleDateString(lang==='TH'?'th-TH':'en-US')} <br/>
-                              <span className="text-[10px]">{new Date(l.created_at).toLocaleTimeString('th-TH').slice(0,5)} น.</span>
-                            </td>
-                            {/* ชื่อพนักงาน */}
-                            <td className="p-4 text-sm font-black text-slate-800 whitespace-nowrap">{l.employees?.full_name || 'ไม่ทราบชื่อ'}</td>
-                            {/* วันที่ขอหยุด (Highlight) */}
-                            <td className="p-4 whitespace-nowrap">
-                              <span className="bg-purple-100 text-purple-700 px-3 py-1.5 rounded-lg font-black text-sm border border-purple-200">
-                                {new Date(l.start_date).toLocaleDateString(lang==='TH'?'th-TH':'en-US', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
-                              </span>
-                            </td>
-                            {/* เหตุผล */}
-                            <td className="p-4 text-xs font-medium text-slate-600">
-                              <div className="line-clamp-2 hover:line-clamp-none transition-all">{l.reason || '-'}</div>
-                            </td>
-                            {/* สถานะ */}
-                            <td className="p-4 text-right rounded-r-xl whitespace-nowrap">
-                              <span className={`text-[11px] px-3 py-1.5 rounded-full font-black ${l.status==='อนุมัติ'?'bg-emerald-100 text-emerald-600':l.status==='รออนุมัติ'?'bg-amber-100 text-amber-600':'bg-rose-100 text-rose-600'}`}>
-                                {getTranslatedStatus(l.status)}
-                              </span>
                             </td>
                          </tr>
                       ))
@@ -11912,214 +13224,451 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
         </div>
       )}
 
-{/* 💸 VIEW: PAYROLL (ระบบเงินเดือนและสลิป - เรียงรหัสพนักงาน & บอสไฮไลท์คู่) */}
-      {currentView === "payroll" && (
-        <div className="px-4 md:px-8 pb-8 z-10 flex-1 flex flex-col w-full mt-4 animate-fade-in">
-          <div className="bg-white/80 backdrop-blur-xl rounded-[2rem] p-6 md:p-8 shadow-sm border border-white flex-1 flex flex-col">
+{/* 💸 VIEW: PAYROLL (ฉบับอัปเกรด: Draft Mode ซ่อนสลิปก่อนส่ง + งวดเดือนไทย + ไร้ขอบ + ลายเซ็น 45px + แก้ป้ายบังตัวเลข) */}
+      {currentView === "payroll" && (() => {
 
-            {/* 🤖 AI Payroll Intelligence & Auditor */}
-            {(user?.role === 'admin' || user?.role === 'ceo') && (() => {
-              const targetSlips = (adminPayrollSlips || [])
-                .filter(p => String(p.month || '').startsWith(payrollFilterMonth));
-              
-              if (targetSlips.length === 0) return null;
+        // 🛠️ แปลงเดือนเป็นภาษาไทย
+        const formatThaiMonth = (monthStr) => {
+          if (!monthStr) return "";
+          const [year, month] = monthStr.split('-');
+          const thaiMonths = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
+          return `${thaiMonths[parseInt(month, 10) - 1]} ${parseInt(year, 10) + 543}`;
+        };
 
-              const totalPayroll = targetSlips.reduce((sum, item) => sum + (Number(item.net_salary) || 0), 0);
-              const companySales = Number(salesData?.current || 0);
-              const laborCostRatio = companySales > 0 ? ((totalPayroll / companySales) * 100).toFixed(1) : 0;
+        // 🛠️ ดูดรูปภาพมาแปลงเป็น Base64
+        const getBase64Image = async (url) => {
+          try {
+            const response = await fetch(url);
+            const blob = await response.blob();
+            return new Promise((resolve) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result);
+              reader.readAsDataURL(blob);
+            });
+          } catch (error) {
+            console.error("โหลดรูปไม่สำเร็จ:", error);
+            return url;
+          }
+        };
 
-              const auditIssues = [];
-              targetSlips.forEach(slip => {
-                const empName = slip.employees?.full_name || 'พนักงาน';
-                const isCEO = (slip.employees?.position || '').toUpperCase().includes('CEO');
-                
-                if (Number(slip.net_salary) < 0) auditIssues.push(`🚨 [ยอดติดลบ] ${empName}: ยอดรับสุทธิติดลบ โปรดตรวจสอบ!`);
-                if (Number(slip.net_salary) > 100000 && !isCEO) auditIssues.push(`⚠️ [ยอดจ่ายสูง] ${empName}: มียอดจ่ายสูงเกิน 1 แสนบาท`);
-              });
-
-              return (
-                <div className="mb-6 animate-fade-in shrink-0">
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                    <div className="lg:col-span-2 p-6 rounded-[2rem] border bg-gradient-to-br from-indigo-600 to-purple-700 text-white shadow-lg shadow-indigo-200 relative overflow-hidden">
-                      <div className="relative z-10 flex flex-col md:flex-row justify-between items-center gap-6">
-                        <div>
-                          <h4 className="font-black text-xs uppercase tracking-[0.2em] opacity-70">AI Business Intelligence</h4>
-                          <p className="text-3xl font-black mt-2">Labor Cost: {laborCostRatio}%</p>
-                          <p className="text-xs font-bold opacity-80 mt-2">
-                            {laborCostRatio > 30 ? "⚠️ ต้นทุนแรงงานสูงกว่าเกณฑ์มาตรฐาน" : "✅ ต้นทุนแรงงานอยู่ในเกณฑ์ที่เหมาะสม"}
-                          </p>
-                        </div>
-                        <div className="bg-white/20 backdrop-blur-xl p-5 rounded-[1.5rem] border border-white/20 text-center min-w-[180px]">
-                          <p className="text-[10px] font-black uppercase tracking-widest opacity-80 mb-1">ยอดจ่ายรวม</p>
-                          <p className="text-2xl font-black">฿{totalPayroll.toLocaleString()}</p>
-                          <p className="text-[9px] opacity-70 mt-1">เดือน {payrollFilterMonth}</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className={`p-6 rounded-[2rem] border shadow-sm ${auditIssues.length > 0 ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200 opacity-60'}`}>
-                      <h5 className={`font-black text-xs uppercase tracking-wider mb-4 ${auditIssues.length > 0 ? 'text-rose-600' : 'text-slate-500'}`}>ตรวจสอบความถูกต้อง</h5>
-                      <div className="space-y-2 max-h-[120px] overflow-y-auto pr-2 custom-scrollbar">
-                        {auditIssues.length > 0 ? auditIssues.map((issue, i) => (
-                          <div key={i} className="text-[10px] font-bold text-rose-700 bg-white p-3 rounded-xl border border-rose-100 shadow-sm">{issue}</div>
-                        )) : (
-                          <p className="text-[11px] font-bold text-slate-400 italic text-center py-4">ข้อมูลเงินเดือนถูกต้องครบถ้วน</p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-            
-            <div className="mb-6 border-b border-slate-100 pb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 shrink-0">
-              <div>
-                <h3 className="font-black text-slate-800 text-xl flex items-center gap-2">💸 รายการเงินเดือนพนักงาน</h3>
-                <p className="text-sm text-slate-500 font-medium mt-1">เรียงตามรหัสพนักงาน (CEO Priority)</p>
+        // 📄 แม่แบบ HTML สลิป
+        const generateSlipHTML = (emp, slipObj, formatNum, totalEarnings, totalDeductions, logoData, sigData) => `
+          <div id="slip-container" style="font-family: 'Tahoma', sans-serif; color: black; padding: 20px; width: 750px; box-sizing: border-box; margin: 0 auto; background: white;">
+            <div style="display: flex; align-items: center; margin-bottom: 5px;">
+              <div style="width: 75px; height: 75px; border-radius: 50%; border: 1px solid #ccc; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #fff;">
+                <img src="${logoData}" style="width: 100%; height: auto; display: block;" crossOrigin="anonymous" onerror="this.style.display='none';"/>
               </div>
-              
-              <div className="flex gap-2 w-full sm:w-auto">
-                {(user?.role === 'admin' || user?.role === 'ceo') && (
-                  <button onClick={() => {
-                    setPayrollForm({ employee_id: '', month: payrollFilterMonth, base_salary: 0, ot_amount: 0, deductions: 0, bonus: 0, commission: 0, is_previewed: false });
-                    setIsPayrollModalOpen(true);
-                  }} className="w-full sm:w-auto bg-emerald-500 text-white px-6 py-3 rounded-xl font-black text-sm shadow-md hover:scale-[1.02] transition-all flex items-center justify-center gap-2">
-                    ➕ สร้างสลิปใหม่
-                  </button>
-                )}
+              <div style="margin-left: 20px;">
+                <h2 style="margin: 0; font-size: 22px; font-weight: bold;">บริษัท แพนเค้ก เลิฟลี่ เอ็นริชเม้นท์ จำกัด</h2>
+                <p style="margin: 2px 0 0 0; font-size: 13px;">PANCAKE LOVELY ENRICHMENT CO., LTD.</p>
               </div>
             </div>
+            <hr style="border: 0; border-top: 1.5px solid black; margin-bottom: 20px;">
+            <div style="text-align: center; margin-bottom: 30px;">
+              <span style="font-size: 18px; font-weight: bold; border-bottom: 2px solid black;">ใบจ่ายเงินเดือน / PAYSLIP</span>
+            </div>
+            <table style="width: 100%; margin-bottom: 20px; font-size: 13px; line-height: 2;">
+              <tr><td width="15%"><b>รหัสพนักงาน:</b></td><td width="35%">${emp.employee_code || '-'}</td><td width="15%"><b>งวดเดือน:</b></td><td width="35%"><b>${formatThaiMonth(slipObj.month)}</b></td></tr>
+              <tr><td><b>ชื่อ-สกุล:</b></td><td>${emp.full_name}</td><td><b>วันที่จ่าย:</b></td><td>${new Date(slipObj.created_at).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' })}</td></tr>
+              <tr><td><b>ตำแหน่ง:</b></td><td>${emp.position || '-'}</td><td><b>ประเภทการจ้าง:</b></td><td>${emp.employee_type || 'พนักงานประจำ'}</td></tr>
+            </table>
+            <table border="1" style="width: 100%; border-collapse: collapse; border-color: black; font-size: 13px;">
+              <tr style="background: #fdfdfd;">
+                <th style="border: 1px solid black; padding: 10px; text-align: center; width: 50%;">รายได้ (Earnings)</th>
+                <th style="border: 1px solid black; padding: 10px; text-align: center; width: 50%;">รายการหัก (Deductions)</th>
+              </tr>
+              <tr style="height: 180px;">
+                <td style="border: 1px solid black; vertical-align: top; padding: 10px;">
+                  <div style="display:flex; justify-content: space-between; margin-bottom: 8px;"><span>เงินเดือน (Base Salary)</span> <span>${formatNum(slipObj.base_salary)}</span></div>
+                  ${Number(slipObj.ot_amount) > 0 ? `<div style="display:flex; justify-content: space-between; margin-bottom: 8px;"><span>ค่าล่วงเวลา (OT)</span> <span>${formatNum(slipObj.ot_amount)}</span></div>` : ''}
+                  ${Number(slipObj.bonus) > 0 ? `<div style="display:flex; justify-content: space-between; margin-bottom: 8px;"><span>โบนัส / เบี้ยขยัน</span> <span>${formatNum(slipObj.bonus)}</span></div>` : ''}
+                  ${Number(slipObj.commission) > 0 ? `<div style="display:flex; justify-content: space-between; margin-bottom: 8px;"><span>ค่าคอมมิชชัน</span> <span>${formatNum(slipObj.commission)}</span></div>` : ''}
+                </td>
+                <td style="border: 1px solid black; vertical-align: top; padding: 10px;">
+                  <div style="display:flex; justify-content: space-between; margin-bottom: 8px;"><span>หักวันลา (Leave)</span> <span>${formatNum(slipObj.leave_deduction)}</span></div>
+                  <div style="display:flex; justify-content: space-between; margin-bottom: 8px;"><span>หักมาสาย (Late)</span> <span>${formatNum(slipObj.manual_late_deduct || slipObj.late_deduction)}</span></div>
+                  <div style="display:flex; justify-content: space-between; margin-bottom: 8px;"><span>หักขาดงาน (Absence)</span> <span>${formatNum(slipObj.absence_deduction)}</span></div>
+                  <div style="display:flex; justify-content: space-between; margin-bottom: 8px;"><span>หักประกันสังคม (SSO)</span> <span>${formatNum(slipObj.social_security || slipObj.social_security_deduction)}</span></div>
+                  <div style="display:flex; justify-content: space-between; margin-bottom: 8px;"><span>หักภาษี ณ ที่จ่าย (Tax)</span> <span>${formatNum(slipObj.tax || slipObj.tax_deduction)}</span></div>
+                </td>
+              </tr>
+              <tr style="font-weight: bold; background: #fdfdfd;">
+                <td style="border: 1px solid black; padding: 10px;"><div style="display: flex; justify-content: space-between;"><span>รวมรายได้ (Total Earnings)</span> <span>${formatNum(totalEarnings)}</span></div></td>
+                <td style="border: 1px solid black; padding: 10px;"><div style="display: flex; justify-content: space-between;"><span>รวมรายการหัก (Total Deductions)</span> <span>${formatNum(totalDeductions)}</span></div></td>
+              </tr>
+            </table>
+            <div style="margin-top: 20px; border: 1px solid black; padding: 15px; display: flex; justify-content: flex-end; align-items: center; background: #fafafa;">
+              <span style="font-size: 16px; font-weight: bold; margin-right: 25px;">เงินได้สุทธิ (Net Pay)</span>
+              <span style="font-size: 18px; font-weight: bold; border-bottom: 4px double black; padding: 0 10px; min-width: 120px; text-align: right;">฿ ${formatNum(slipObj.net_salary)}</span>
+            </div>
+            <div style="margin-top: 50px; display: flex; justify-content: space-between; align-items: flex-end; text-align: center; font-size: 12px;">
+              <div style="width: 40%;">
+                <div style="height: 55px;"></div> 
+                <p style="margin: 0;">--------------------------------------------------</p>
+                <p style="margin-top: 8px;"><b>ผู้รับเงิน (Employee)</b></p>
+                <p style="color: #666; font-size: 10px; margin-top: 4px;">วันที่ ....... / ....... / ...........</p>
+              </div>
+              <div style="width: 40%; position: relative;">
+                <div style="height: 50px; display: flex; justify-content: center; align-items: center; margin-bottom: -5px;">
+                  <img src="${sigData}" style="height: 45px; width: auto; object-fit: contain; mix-blend-mode: multiply; display: block;" crossOrigin="anonymous"/>
+                </div>
+                <p style="margin: 0;">--------------------------------------------------</p>
+                <p style="margin-top: 8px;"><b>ผู้จ่ายเงิน (Authorized Signature)</b></p>
+                <p style="font-size: 10px; margin-top: 4px;">บริษัท แพนเค้ก เลิฟลี่ เอ็นริชเม้นท์ จำกัด</p>
+              </div>
+            </div>
+          </div>
+        `;
 
-            {(user?.role === 'admin' || user?.role === 'ceo') ? (() => {
-              const fMonth = String(payrollFilterMonth || '').trim();
-              const keyword = String(payrollSearchKeyword || '').trim();
+        // 📧 ฟังก์ชันส่ง Email (ปลดล็อคให้พนักงานเห็นด้วย)
+        const handleSendEmailCompleteV3 = async (slipObj) => {
+          try {
+            const { data: freshEmp } = await supabase.from('employees').select('*').eq('id', slipObj.employee_id).single();
+            const emp = freshEmp || slipObj.employees || {};
+            if (!emp.email) throw new Error("ไม่พบ Email พนักงาน กรุณาตั้งค่าอีเมลให้พนักงานก่อนครับ");
 
-              const adminFilteredSlips = (adminPayrollSlips || [])
-                .filter(slip => {
-                  const sMonth = String(slip.month || '').trim();
-                  const matchMonth = !fMonth || sMonth.includes(fMonth);
-                  const empId = String(slip.employee_id || '');
-                  const matchEmp = !keyword || empId === keyword;
-                  return matchMonth && matchEmp;
-                })
-                // 🟢 ปรับการเรียงลำดับ: เรียงตามรหัสพนักงาน PL001, PL002, PL003...
-                .sort((a, b) => {
-                  const codeA = a.employees?.employee_code || "";
-                  const codeB = b.employees?.employee_code || "";
-                  return codeA.localeCompare(codeB, undefined, { numeric: true, sensitivity: 'base' });
+            Swal.fire({ title: 'กำลังส่ง Email และปลดล็อคสลิป...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+            
+            const totalEarnings = Number(slipObj.base_salary || 0) + Number(slipObj.ot_amount || 0) + Number(slipObj.bonus || 0) + Number(slipObj.commission || 0);
+            const totalDeductions = Number(slipObj.leave_deduction || 0) + Number(slipObj.manual_late_deduct || slipObj.late_deduction || 0) + Number(slipObj.absence_deduction || 0) + Number(slipObj.social_security || slipObj.social_security_deduction || 0) + Number(slipObj.tax || slipObj.tax_deduction || 0) + Number(slipObj.deductions || 0);
+            
+            const monthTH = formatThaiMonth(slipObj.month);
+            const today = new Date();
+            const payDate = `${today.getDate()} ${["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"][today.getMonth()]} ${today.getFullYear() + 543}`;
+
+            const logoData = await getBase64Image('https://qdqmbnztfdrfqtdzyxno.supabase.co/storage/v1/object/public/assets/S__33193987.png');
+            const sigData = await getBase64Image('https://qdqmbnztfdrfqtdzyxno.supabase.co/storage/v1/object/public/assets/2026-04-23_18-25-39.png');
+
+            const slipDataPayload = {
+              action: 'send_payslip_pdf',
+              data: {
+                to: emp.email,
+                subject: `💸 สลิปเงินเดือนรอบ ${monthTH} (คุณ ${emp.full_name})`,
+                empName: emp.full_name, empCode: emp.employee_code || "-", position: emp.position || "Staff", salaryType: emp.salary_type || "พนักงานประจำ",
+                monthTH: monthTH, payDate: payDate,
+                baseSalary: Number(slipObj.base_salary || 0), ot: Number(slipObj.ot_amount || 0), bonus: Number(slipObj.bonus || 0), commission: Number(slipObj.commission || 0),
+                leaveDeduct: Number(slipObj.leave_deduction || 0), lateDeduct: Number(slipObj.manual_late_deduct || slipObj.late_deduction || 0), absenceDeduct: Number(slipObj.absence_deduction || 0), ssoDeduct: Number(slipObj.social_security || slipObj.social_security_deduction || 0), taxDeduct: Number(slipObj.tax || slipObj.tax_deduction || 0), otherDeduct: Number(slipObj.deductions || 0),
+                totalEarnings: totalEarnings, totalDeductions: totalDeductions, netSalary: Number(slipObj.net_salary || 0),
+                logoBase64: logoData, sigBase64: sigData
+              }
+            };
+
+            await fetch("https://script.google.com/macros/s/AKfycbxBMRd9gKYzHU7Pz0-189-BOYVb15eS7PmF9zKiUYCiHlDUhjpe39vi7Y3Vx1sMr2VEoA/exec", {
+              method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' },
+              body: JSON.stringify(slipDataPayload)
+            });
+
+            // 🔓 เปลี่ยนสถานะเป็น ส่งมอบแล้ว
+            await supabase.from('payroll_slips').update({ is_published: true }).eq('id', slipObj.id);
+            setAdminPayrollSlips(prev => prev.map(s => s.id === slipObj.id ? { ...s, is_published: true } : s));
+
+            Swal.fire({ icon: 'success', title: 'ส่งสำเร็จ!', text: 'ระบบส่งอีเมลและเปิดให้พนักงานมองเห็นสลิปนี้แล้ว', timer: 2000, showConfirmButton: false });
+          } catch (err) { Swal.fire('Error', err.message, 'error'); }
+        };
+
+        // 🖨️ ฟังก์ชัน Print
+        const handlePrintSlipV2 = async (slipObj) => {
+          Swal.fire({ title: 'กำลังเตรียมหน้าพิมพ์...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+          try {
+            const { data: freshEmp } = await supabase.from('employees').select('*').eq('id', slipObj.employee_id).single();
+            const emp = freshEmp || slipObj.employees || {};
+            const formatNum = (n) => Number(n || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            const totalEarnings = Number(slipObj.base_salary || 0) + Number(slipObj.ot_amount || 0) + Number(slipObj.bonus || 0) + Number(slipObj.commission || 0);
+            const totalDeductions = Number(slipObj.leave_deduction || 0) + Number(slipObj.manual_late_deduct || slipObj.late_deduction || 0) + Number(slipObj.absence_deduction || 0) + Number(slipObj.social_security || slipObj.social_security_deduction || 0) + Number(slipObj.tax || slipObj.tax_deduction || 0) + Number(slipObj.deductions || 0);
+
+            const logoData = await getBase64Image('https://qdqmbnztfdrfqtdzyxno.supabase.co/storage/v1/object/public/assets/S__33193987.png');
+            const sigData = await getBase64Image('https://qdqmbnztfdrfqtdzyxno.supabase.co/storage/v1/object/public/assets/2026-04-23_18-25-39.png');
+
+            const htmlContent = generateSlipHTML(emp, slipObj, formatNum, totalEarnings, totalDeductions, logoData, sigData);
+
+            const iframe = document.createElement('iframe');
+            iframe.style.position = 'fixed';
+            iframe.style.right = '0'; iframe.style.bottom = '0';
+            iframe.style.width = '0'; iframe.style.height = '0'; iframe.style.border = '0';
+            document.body.appendChild(iframe);
+
+            iframe.contentWindow.document.write(`
+              <html>
+                <head>
+                  <title>Payslip_${emp.employee_code}</title>
+                  <style>
+                    @page { size: A4 portrait; margin: 0; }
+                    @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; margin: 0; padding: 15mm; } }
+                  </style>
+                </head>
+                <body style="margin: 0; display: flex; justify-content: center; background: #fff;">
+                  ${htmlContent}
+                </body>
+              </html>
+            `);
+            iframe.contentWindow.document.close();
+            iframe.contentWindow.focus();
+            
+            setTimeout(() => {
+              Swal.close();
+              iframe.contentWindow.print();
+              setTimeout(() => { document.body.removeChild(iframe); }, 1000);
+            }, 800);
+
+          } catch (err) { Swal.fire('Error', 'ไม่สามารถสร้างหน้าพิมพ์ได้: ' + err.message, 'error'); }
+        };
+
+        // 📥 ฟังก์ชัน Download
+        const handleDirectDownload = async (slipObj) => {
+          Swal.fire({ title: 'กำลังดึงข้อมูลและเตรียมไฟล์ PDF...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+          try {
+            const { data: freshEmp } = await supabase.from('employees').select('*').eq('id', slipObj.employee_id).single();
+            const emp = freshEmp || slipObj.employees || {};
+            const formatNum = (n) => Number(n || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            const totalEarnings = Number(slipObj.base_salary || 0) + Number(slipObj.ot_amount || 0) + Number(slipObj.bonus || 0) + Number(slipObj.commission || 0);
+            const totalDeductions = Number(slipObj.leave_deduction || 0) + Number(slipObj.manual_late_deduct || slipObj.late_deduction || 0) + Number(slipObj.absence_deduction || 0) + Number(slipObj.social_security || slipObj.social_security_deduction || 0) + Number(slipObj.tax || slipObj.tax_deduction || 0) + Number(slipObj.deductions || 0);
+
+            const logoData = await getBase64Image('https://qdqmbnztfdrfqtdzyxno.supabase.co/storage/v1/object/public/assets/S__33193987.png');
+            const sigData = await getBase64Image('https://qdqmbnztfdrfqtdzyxno.supabase.co/storage/v1/object/public/assets/2026-04-23_18-25-39.png');
+
+            const element = document.createElement('div');
+            element.innerHTML = generateSlipHTML(emp, slipObj, formatNum, totalEarnings, totalDeductions, logoData, sigData);
+
+            if (!window.html2pdf) {
+              const script = document.createElement('script');
+              script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
+              document.head.appendChild(script);
+              await new Promise(r => script.onload = r);
+            }
+
+            const options = {
+              margin: [0.3, 0.2],
+              filename: `Slip_${emp.full_name}_${slipObj.month}.pdf`,
+              image: { type: 'jpeg', quality: 1 },
+              html2canvas: { scale: 2, useCORS: true, letterRendering: true },
+              jsPDF: { unit: 'in', format: 'a4', orientation: 'portrait' }
+            };
+
+            await window.html2pdf().set(options).from(element).save();
+            Swal.fire({ icon: 'success', title: 'ดาวน์โหลดสำเร็จ', timer: 1200, showConfirmButton: false });
+
+          } catch (err) { Swal.fire('Error', 'ไม่สามารถสร้างไฟล์ได้: ' + err.message, 'error'); }
+        };
+
+        return (
+          <div className="px-4 md:px-8 pb-8 z-10 flex-1 flex flex-col w-full mt-4 animate-fade-in">
+            <div className="bg-white/80 backdrop-blur-xl rounded-[2rem] p-6 md:p-8 shadow-sm border border-white flex-1 flex flex-col">
+
+              {/* 🤖 AI Payroll Intelligence */}
+              {(user?.role === 'admin' || user?.role === 'ceo') && (() => {
+                const targetSlips = (adminPayrollSlips || []).filter(p => String(p.month || '').startsWith(payrollFilterMonth));
+                if (targetSlips.length === 0) return null;
+
+                const totalPayroll = targetSlips.reduce((sum, item) => sum + (Number(item.net_salary) || 0), 0);
+                const companySales = Number(salesData?.current || 0);
+                const laborCostRatio = companySales > 0 ? ((totalPayroll / companySales) * 100).toFixed(1) : 0;
+
+                const auditIssues = [];
+                targetSlips.forEach(slip => {
+                  const empName = slip.employees?.full_name || 'พนักงาน';
+                  const isCEO = (slip.employees?.position || '').toUpperCase().includes('CEO');
+                  if (Number(slip.net_salary) < 0) auditIssues.push(`🚨 [ยอดติดลบ] ${empName}: ยอดรับสุทธิติดลบ โปรดตรวจสอบ!`);
+                  if (Number(slip.net_salary) > 100000 && !isCEO) auditIssues.push(`⚠️ [ยอดจ่ายสูง] ${empName}: มียอดจ่ายสูงเกิน 1 แสนบาท`);
                 });
 
-              return (
-                <div className="flex flex-col flex-1 h-full w-full">
-                  <div className="mb-4 flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-2xl border border-slate-100 shadow-sm gap-4">
-                    <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
-                      <select
-                        value={payrollSearchKeyword}
-                        onChange={(e) => setPayrollSearchKeyword(e.target.value)}
-                        className="w-full sm:w-64 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-bold text-slate-700 outline-none focus:border-indigo-500 shadow-sm"
-                      >
-                        <option value="">-- พนักงานทุกคน --</option>
-                        {employees.map(emp => (
-                          <option key={emp.id} value={emp.id}>{emp.employee_code} - {emp.full_name}</option>
-                        ))}
-                      </select>
-                      <input
-                        type="month"
-                        value={payrollFilterMonth}
-                        onChange={(e) => setPayrollFilterMonth(e.target.value)}
-                        className="w-full sm:w-auto bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 font-black text-indigo-600 outline-none focus:border-indigo-500 shadow-sm"
-                      />
+                return (
+                  <div className="mb-6 animate-fade-in shrink-0">
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                      <div className="lg:col-span-2 p-6 rounded-[2rem] border bg-gradient-to-br from-indigo-600 to-purple-700 text-white shadow-lg shadow-indigo-200 relative overflow-hidden">
+                        <div className="relative z-10 flex flex-col md:flex-row justify-between items-center gap-6">
+                          <div>
+                            <h4 className="font-black text-xs uppercase tracking-[0.2em] opacity-70">AI Business Intelligence</h4>
+                            <p className="text-3xl font-black mt-2">Labor Cost: {laborCostRatio}%</p>
+                            <p className="text-xs font-bold opacity-80 mt-2">
+                              {laborCostRatio > 30 ? "⚠️ ต้นทุนแรงงานสูงกว่าเกณฑ์มาตรฐาน" : "✅ ต้นทุนแรงงานอยู่ในเกณฑ์ที่เหมาะสม"}
+                            </p>
+                          </div>
+                          <div className="bg-white/20 backdrop-blur-xl p-5 rounded-[1.5rem] border border-white/20 text-center min-w-[180px]">
+                            <p className="text-[10px] font-black uppercase tracking-widest opacity-80 mb-1">ยอดจ่ายรวม</p>
+                            <p className="text-2xl font-black">฿{totalPayroll.toLocaleString(undefined, {minimumFractionDigits: 2})}</p>
+                            <p className="text-[9px] opacity-70 mt-1">เดือน {payrollFilterMonth}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className={`p-6 rounded-[2rem] border shadow-sm ${auditIssues.length > 0 ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200 opacity-60'}`}>
+                        <h5 className={`font-black text-xs uppercase tracking-wider mb-4 ${auditIssues.length > 0 ? 'text-rose-600' : 'text-slate-500'}`}>ตรวจสอบความถูกต้อง</h5>
+                        <div className="space-y-2 max-h-[120px] overflow-y-auto pr-2 custom-scrollbar">
+                          {auditIssues.length > 0 ? auditIssues.map((issue, i) => (
+                            <div key={i} className="text-[10px] font-bold text-rose-700 bg-white p-3 rounded-xl border border-rose-100 shadow-sm">{issue}</div>
+                          )) : (
+                            <p className="text-[11px] font-bold text-slate-400 italic text-center py-4">ข้อมูลเงินเดือนถูกต้องครบถ้วน</p>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
-
-                  <div className="flex-1 overflow-x-auto overflow-y-auto w-full custom-scrollbar pr-2">
-                    <table className="w-full text-left border-separate border-spacing-y-2 min-w-[1200px]">
-                      <thead className="text-[11px] md:text-xs text-slate-400 uppercase bg-slate-50 sticky top-0 z-10 shadow-sm">
-                        <tr>
-                          <th className="p-4 rounded-l-xl">พนักงาน (รหัส)</th>
-                          <th className="p-4 text-center">ฐานเงินเดือน</th>
-                          <th className="p-4 text-center text-indigo-500">คอม/โบนัส</th>
-                          <th className="p-4 text-center text-rose-500">รวมหัก</th>
-                          <th className="p-4 text-center text-emerald-600">รับสุทธิ</th>
-                          <th className="p-4 text-right rounded-r-xl">จัดการ</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {adminFilteredSlips.length === 0 ? (
-                          <tr><td colSpan="6" className="text-center p-10 text-slate-400 font-bold bg-slate-50 rounded-xl">ไม่พบข้อมูลสลิปเดือนนี้</td></tr>
-                        ) : (
-                          adminFilteredSlips.map((slip) => {
-                            const empName = slip.employees?.full_name || 'ไม่ทราบชื่อ';
-                            const empCode = slip.employees?.employee_code || '-';
-                            // 🟢 เช็คจากตำแหน่งงาน (CEO ทั้ง 2 ท่านจะได้รับผลเหมือนกัน)
-                            const isCEO = (slip.employees?.position || '').toUpperCase().includes('CEO');
-
-                            const earnings = Number(slip.commission || 0) + Number(slip.bonus || 0);
-                            const deds = Number(slip.leave_deduction || 0) + Number(slip.late_deduction || 0) + 
-                                       Number(slip.absence_deduction || 0) + Number(slip.deductions || 0) + 
-                                       Number(slip.social_security_deduction || 0) + Number(slip.tax_deduction || 0);
-
-                            return (
-                              <tr key={slip.id} className={`bg-white shadow-sm hover:shadow-md transition-all border border-slate-50 group ${isCEO ? 'ring-2 ring-amber-400/50 bg-amber-50/10' : ''}`}>
-                                <td className="p-4 font-black rounded-l-xl">
-                                  <div className="flex flex-col">
-                                    <div className="flex items-center gap-2">
-                                      <span className={`text-sm ${isCEO ? 'text-amber-700' : 'text-slate-800'}`}>{empName}</span>
-                                      {isCEO && <span className="text-[9px] bg-amber-500 text-white px-1.5 py-0.5 rounded-md font-bold animate-pulse">CEO</span>}
-                                    </div>
-                                    <span className="text-[10px] text-indigo-500 font-black tracking-widest uppercase mt-0.5">{empCode}</span>
-                                  </div>
-                                </td>
-                                <td className="p-4 text-center font-bold text-slate-600">฿{Number(slip.base_salary).toLocaleString()}</td>
-                                <td className="p-4 text-center font-bold text-indigo-600">฿{earnings.toLocaleString()}</td>
-                                <td className="p-4 text-center font-bold text-rose-500">{deds > 0 ? `- ฿${deds.toLocaleString()}` : '-'}</td>
-                                <td className="p-4 text-center text-emerald-600 font-black text-lg bg-emerald-50/30">฿{Number(slip.net_salary).toLocaleString()}</td>
-                                <td className="p-4 text-right rounded-r-xl">
-                                  <div className="flex justify-end items-center gap-1.5 ml-auto">
-                                    <button onClick={() => handleSendSlipLine(slip)} className="px-3 py-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-green-500 hover:text-white transition-all shadow-sm">📲</button>
-                                    <button onClick={() => handlePrintSlip(slip)} className="px-3 py-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-emerald-500 hover:text-white transition-all shadow-sm">🖨️</button>
-                                    <button onClick={() => handleDeleteSlip(slip.id)} className="px-3 py-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-rose-500 hover:text-white transition-all shadow-sm">🗑️</button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                );
+              })()}
+              
+              <div className="mb-6 border-b border-slate-100 pb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 shrink-0">
+                <div>
+                  <h3 className="font-black text-slate-800 text-xl flex items-center gap-2">💸 รายการเงินเดือนพนักงาน</h3>
+                  <p className="text-sm text-slate-500 font-medium mt-1">ระบบประมวลผลรายได้และรายการหักอัตโนมัติ พร้อมออกเอกสารสลิปเงินเดือน</p>
                 </div>
-              ); })() : (
-              /* มุมมองพนักงานทั่วไป */
-              <div className="flex-1 overflow-y-auto custom-scrollbar">
-                 {mySlips.length === 0 ? (
-                   <div className="bg-slate-50 border border-slate-100 p-10 rounded-3xl text-center shadow-sm max-w-md mx-auto mt-10">
-                      <span className="text-6xl block mb-4">📄</span>
-                      <p className="text-slate-500 font-bold">ยังไม่มีประวัติสลิปเงินเดือน</p>
-                   </div>
-                 ) : (
-                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                     {mySlips.map(slip => (
-                       <div key={slip.id} className="bg-white border border-slate-200 p-6 rounded-3xl shadow-sm hover:shadow-lg transition-all relative overflow-hidden">
-                         <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-full blur-2xl"></div>
-                         <h4 className="text-lg font-black text-slate-800">รอบ: {slip.month}</h4>
-                         <div className="space-y-2.5 my-6 bg-slate-50 p-4 rounded-2xl shadow-inner">
-                           <div className="flex justify-between text-xs font-bold text-slate-500"><span>เงินเดือน:</span> <span>฿{Number(slip.base_salary).toLocaleString()}</span></div>
-                           <div className="flex justify-between text-xs font-bold text-emerald-600"><span>รับสุทธิ:</span> <span>฿{Number(slip.net_salary).toLocaleString()}</span></div>
-                         </div>
-                         <div className="flex gap-2">
-                            <button onClick={() => handleSendSlipLine(slip)} className="flex-1 py-3 bg-green-500 text-white rounded-xl font-black text-xs">LINE</button>
-                            <button onClick={() => handlePrintSlip(slip)} className="flex-1 py-3 bg-emerald-500 text-white rounded-xl font-black text-xs">PRINT</button>
-                         </div>
-                       </div>
-                     ))}
-                   </div>
-                 )}
+                
+                <div className="flex gap-2 w-full sm:w-auto">
+                  {(user?.role === 'admin' || user?.role === 'ceo') && (
+                    <button onClick={() => {
+                      setPayrollForm({ employee_id: '', month: payrollFilterMonth, base_salary: 0, ot_amount: 0, deductions: 0, bonus: 0, commission: 0, is_previewed: false });
+                      setIsPayrollModalOpen(true);
+                    }} className="w-full sm:w-auto bg-emerald-500 text-white px-6 py-3 rounded-xl font-black text-sm shadow-md hover:scale-[1.02] transition-all flex items-center justify-center gap-2">
+                      ➕ สร้างสลิปใหม่
+                    </button>
+                  )}
+                </div>
               </div>
-            )}
+
+              {/* 👨‍💼 ตารางมุมมอง Admin */}
+              {(user?.role === 'admin' || user?.role === 'ceo') ? (() => {
+                const fMonth = String(payrollFilterMonth || '').trim();
+                const keyword = String(payrollSearchKeyword || '').trim();
+
+                const adminFilteredSlips = (adminPayrollSlips || [])
+                  .filter(slip => {
+                    const sMonth = String(slip.month || '').trim();
+                    const matchMonth = !fMonth || sMonth.includes(fMonth);
+                    const empId = String(slip.employee_id || '');
+                    const matchEmp = !keyword || empId === keyword;
+                    return matchMonth && matchEmp;
+                  })
+                  .sort((a, b) => {
+                    const codeA = a.employees?.employee_code || "";
+                    const codeB = b.employees?.employee_code || "";
+                    return codeA.localeCompare(codeB, undefined, { numeric: true, sensitivity: 'base' });
+                  });
+
+                return (
+                  <div className="flex flex-col flex-1 h-full w-full">
+                    <div className="mb-4 flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-2xl border border-slate-100 shadow-sm gap-4">
+                      <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
+                        <select
+                          value={payrollSearchKeyword}
+                          onChange={(e) => setPayrollSearchKeyword(e.target.value)}
+                          className="w-full sm:w-64 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-bold text-slate-700 outline-none focus:border-indigo-500 shadow-sm"
+                        >
+                          <option value="">-- พนักงานทุกคน --</option>
+                          {employees.map(emp => (
+                            <option key={emp.id} value={emp.id}>{emp.employee_code} - {emp.full_name}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="month"
+                          value={payrollFilterMonth}
+                          onChange={(e) => setPayrollFilterMonth(e.target.value)}
+                          className="w-full sm:w-auto bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 font-black text-indigo-600 outline-none focus:border-indigo-500 shadow-sm"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex-1 overflow-x-auto overflow-y-auto w-full custom-scrollbar pr-2">
+                      <table className="w-full text-left border-separate border-spacing-y-2 min-w-[1200px]">
+                        <thead className="text-[11px] md:text-xs text-slate-400 uppercase bg-slate-50 sticky top-0 z-10 shadow-sm">
+                          <tr>
+                            <th className="p-4 rounded-l-xl">พนักงาน (รหัส)</th>
+                            <th className="p-4 text-center">ฐานเงินเดือน</th>
+                            <th className="p-4 text-center text-indigo-500">คอม/โบนัส/OT</th>
+                            <th className="p-4 text-center text-rose-500">รวมรายการหัก</th>
+                            <th className="p-4 text-center text-emerald-600">รับสุทธิ</th>
+                            <th className="p-4 text-right rounded-r-xl">จัดการ</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {adminFilteredSlips.length === 0 ? (
+                            <tr><td colSpan="6" className="text-center p-10 text-slate-400 font-bold bg-slate-50 rounded-xl">ไม่พบข้อมูลสลิปเดือนนี้</td></tr>
+                          ) : (
+                            adminFilteredSlips.map((slip) => {
+                              const empName = slip.employees?.full_name || 'ไม่ทราบชื่อ';
+                              const empCode = slip.employees?.employee_code || '-';
+                              const isCEO = (slip.employees?.position || '').toUpperCase().includes('CEO');
+
+                              const extraEarnings = Number(slip.commission || 0) + Number(slip.bonus || 0) + Number(slip.ot_amount || 0);
+                              const deds = Number(slip.leave_deduction || 0) + Number(slip.manual_late_deduct || slip.late_deduction || 0) + Number(slip.absence_deduction || 0) + Number(slip.deductions || 0) + Number(slip.social_security || slip.social_security_deduction || 0) + Number(slip.tax || slip.tax_deduction || 0);
+                              const format = (n) => Number(n || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+                              return (
+                                <tr key={slip.id} className={`bg-white shadow-sm hover:shadow-md transition-all border border-slate-50 group ${isCEO ? 'ring-2 ring-amber-400/50 bg-amber-50/10' : ''}`}>
+                                  <td className="p-4 font-black rounded-l-xl">
+                                    <div className="flex flex-col">
+                                      <div className="flex items-center gap-2">
+                                        <span className={`text-sm ${isCEO ? 'text-amber-700' : 'text-slate-800'}`}>{empName}</span>
+                                        {isCEO && <span className="text-[9px] bg-amber-500 text-white px-1.5 py-0.5 rounded-md font-bold animate-pulse">CEO</span>}
+                                      </div>
+                                      <span className="text-[10px] text-indigo-500 font-black tracking-widest uppercase mt-0.5">{empCode}</span>
+                                    </div>
+                                  </td>
+                                  <td className="p-4 text-center font-bold text-slate-600">฿{format(slip.base_salary)}</td>
+                                  <td className="p-4 text-center font-bold text-indigo-600">฿{format(extraEarnings)}</td>
+                                  <td className="p-4 text-center font-bold text-rose-500">{deds > 0 ? `- ฿${format(deds)}` : '฿0.00'}</td>
+                                  
+                                  {/* 👁️ ยอดเงิน + ป้ายบอกสถานะเปิดตัว (แก้ไขแล้ว: ใช้ Flex เรียงบน-ล่าง ไม่บังตัวเลข) */}
+                                  <td className="p-4 text-center bg-emerald-50/30">
+                                    <div className="flex flex-col items-center justify-center gap-1.5">
+                                      <span className="text-emerald-600 font-black text-lg leading-none">฿{format(slip.net_salary)}</span>
+                                      {slip.is_published ? (
+                                        <span className="text-[9px] bg-emerald-500 text-white px-2 py-0.5 rounded shadow-sm whitespace-nowrap leading-none">👁️ ส่งแล้ว</span>
+                                      ) : (
+                                        <span className="text-[9px] bg-slate-400 text-white px-2 py-0.5 rounded shadow-sm whitespace-nowrap leading-none">🔒 ซ่อนอยู่</span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  
+                                  <td className="p-4 text-right rounded-r-xl">
+                                    <div className="flex justify-end items-center gap-1.5 ml-auto">
+                                      <button onClick={() => handleSendEmailCompleteV3(slip)} className="px-3 py-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-blue-500 hover:text-white transition-all shadow-sm" title="ส่งอีเมลและปลดล็อคให้พนักงานเห็น">📧</button>
+                                      <button onClick={() => handlePrintSlipV2(slip)} className="px-3 py-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-emerald-500 hover:text-white transition-all shadow-sm">🖨️</button>
+                                      <button onClick={() => handleDirectDownload(slip)} className="px-3 py-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-sky-500 hover:text-white transition-all shadow-sm">📥</button>
+                                      <button onClick={() => handleDeleteSlip(slip.id)} className="px-3 py-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-rose-500 hover:text-white transition-all shadow-sm">🗑️</button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ); 
+              })() : (
+                /* 👩‍💻 ตารางมุมมองพนักงานทั่วไป */
+                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                   {mySlips.length === 0 ? (
+                     <div className="bg-slate-50 border border-slate-100 p-10 rounded-3xl text-center shadow-sm max-w-md mx-auto mt-10">
+                        <span className="text-6xl block mb-4">📄</span>
+                        <p className="text-slate-500 font-bold">ยังไม่มีประวัติสลิปเงินเดือน</p>
+                     </div>
+                   ) : (
+                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                       {mySlips.map(slip => (
+                         <div key={slip.id} className="bg-white border border-slate-200 p-6 rounded-3xl shadow-sm hover:shadow-lg transition-all relative overflow-hidden">
+                           <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/10 rounded-full blur-2xl"></div>
+                           <h4 className="text-lg font-black text-slate-800">รอบ: {formatThaiMonth(slip.month)}</h4>
+                           <div className="space-y-2.5 my-6 bg-slate-50 p-4 rounded-2xl shadow-inner">
+                             <div className="flex justify-between text-xs font-bold text-slate-500"><span>เงินเดือน:</span> <span>฿{Number(slip.base_salary).toLocaleString(undefined, {minimumFractionDigits: 2})}</span></div>
+                             <div className="flex justify-between text-xs font-bold text-emerald-600"><span>รับสุทธิ:</span> <span>฿{Number(slip.net_salary).toLocaleString(undefined, {minimumFractionDigits: 2})}</span></div>
+                           </div>
+                           <div className="flex gap-2 flex-wrap">
+                              {/* 📧 พนักงานเห็นปุ่มกดก็แค่เอาไว้ส่งเข้าเมลตัวเอง */}
+                              <button onClick={() => handleSendEmailCompleteV3(slip)} className="flex-1 py-3 bg-blue-500 text-white rounded-xl font-black text-xs">EMAIL</button>
+                              <button onClick={() => handlePrintSlipV2(slip)} className="flex-1 py-3 bg-emerald-500 text-white rounded-xl font-black text-xs">PRINT</button>
+                              <button onClick={() => handleDirectDownload(slip)} className="flex-1 py-3 bg-purple-500 text-white rounded-xl font-black text-xs basis-full mt-2">DOWNLOAD</button>
+                           </div>
+                         </div>
+                       ))}
+                     </div>
+                   )}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
 {/* ========================================================================= */}
       {/* 🗓️ VIEW: SHIFT MANAGER (ฉบับ Indigo Theme + แยกสีตามวัน + ขนาดกะทัดรัด) */}
@@ -13288,9 +14837,9 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
         </div>
       )}
 
-      {/* 🛠️ MODAL 2: แจ้งปรับปรุงเวลา (V. Mobile Responsive + มีตัวอย่าง Placeholder) */}
+      {/* 🛠️ MODAL 2: แจ้งปรับปรุงเวลา (V. แก้ช่องล้นกรอบ 100% ล็อคขนาดตายตัว) */}
       {isAdjustModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
           <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-lg p-5 sm:p-8 max-h-[95vh] overflow-y-auto relative">
             
             {/* Header */}
@@ -13304,10 +14853,10 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
               <p className="text-slate-500 text-sm mt-1">{t.modalAdjDesc}</p>
             </div>
 
-            <form onSubmit={handleSubmitAdjustment} className="space-y-6">
+            <form onSubmit={handleSubmitAdjustment} className="space-y-6 w-full">
               
               {/* 🔘 Tabs (สลับวันหยุด / แก้ไขเวลา) */}
-              <div className="flex p-1 bg-slate-100 rounded-2xl">
+              <div className="flex p-1 bg-slate-100 rounded-2xl w-full">
                 <button
                   type="button"
                   onClick={() => setAdjustForm({ ...adjustForm, tab: 'swap' })}
@@ -13333,101 +14882,85 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
               </div>
 
               {/* 📝 ฟอร์มตาม Tab */}
-              <div className="bg-slate-50 p-4 sm:p-5 rounded-2xl border border-slate-100">
+              <div className="bg-slate-50 p-4 sm:p-5 rounded-2xl border border-slate-100 w-full overflow-hidden">
                 <p className="text-xs font-bold text-blue-500 mb-4 flex items-center">
                   ℹ️ {adjustForm.tab === 'swap' ? t.modalAdjDetailSwap : t.modalAdjDetailEdit}
                 </p>
 
                 {adjustForm.tab === 'swap' ? (
                   /* ท่าสลับวันหยุด */
-                  <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-4">
-                    <div className="w-full min-w-0">
+                  <div className="flex flex-col sm:flex-row items-center gap-3 sm:gap-4 w-full">
+                    <div className="w-full min-w-0 flex-1">
                       <label className="block text-xs font-bold text-slate-700 mb-1">{t.modalAdjOldDate}</label>
                       <input 
-                        type="text" 
-                        onFocus={(e) => (e.target.type = "date")}
-                        onBlur={(e) => { if (!e.target.value) e.target.type = "text"; }}
-                        placeholder="วว/ดด/ปปปป"
+                        type="date" 
                         required 
                         value={adjustForm.oldDate}
                         onChange={(e) => setAdjustForm({...adjustForm, oldDate: e.target.value})}
-                        className="w-full p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-400 focus:outline-none text-sm placeholder-slate-400 font-medium" 
+                        className="w-full max-w-full box-border p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-400 focus:outline-none text-sm font-medium appearance-none m-0 block" 
                       />
                     </div>
                     
-                    {/* ลูกศรชี้ขวา (โชว์จอใหญ่) / ชี้ลง (โชว์มือถือ) */}
                     <div className="hidden sm:block text-slate-300 font-bold mt-5">→</div>
                     <div className="block sm:hidden text-slate-300 font-bold rotate-90 my-1 text-lg">→</div>
 
-                    <div className="w-full min-w-0">
+                    <div className="w-full min-w-0 flex-1">
                       <label className="block text-xs font-bold text-slate-700 mb-1">{t.modalAdjNewDate}</label>
                       <input 
-                        type="text" 
-                        onFocus={(e) => (e.target.type = "date")}
-                        onBlur={(e) => { if (!e.target.value) e.target.type = "text"; }}
-                        placeholder="วว/ดด/ปปปป"
+                        type="date" 
                         required 
                         value={adjustForm.newDate}
                         onChange={(e) => setAdjustForm({...adjustForm, newDate: e.target.value})}
-                        className="w-full p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-400 focus:outline-none text-sm placeholder-slate-400 font-medium" 
+                        className="w-full max-w-full box-border p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-400 focus:outline-none text-sm font-medium appearance-none m-0 block" 
                       />
                     </div>
                   </div>
                 ) : (
                   /* ท่าแก้ไขเวลา */
-                  <div className="space-y-4">
-                    <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
-                      <div className="w-full min-w-0">
+                  <div className="space-y-4 w-full">
+                    <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 w-full">
+                      <div className="w-full min-w-0 flex-1">
                         <label className="block text-xs font-bold text-slate-700 mb-1">{t.modalAdjDate}</label>
                         <input 
-                          type="text" 
-                          onFocus={(e) => (e.target.type = "date")}
-                          onBlur={(e) => { if (!e.target.value) e.target.type = "text"; }}
-                          placeholder="วว/ดด/ปปปป"
+                          type="date" 
                           required 
                           value={adjustForm.incidentDate}
                           onChange={(e) => setAdjustForm({...adjustForm, incidentDate: e.target.value})}
-                          className="w-full p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-400 focus:outline-none text-sm placeholder-slate-400 font-medium" 
+                          className="w-full max-w-full box-border p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-400 focus:outline-none text-sm font-medium appearance-none m-0 block" 
                         />
                       </div>
-                      <div className="w-full min-w-0">
+                      <div className="w-full min-w-0 flex-1">
                         <label className="block text-xs font-bold text-slate-700 mb-1">{t.modalAdjTimeType}</label>
                         <select 
                           value={adjustForm.timeType}
                           onChange={(e) => setAdjustForm({...adjustForm, timeType: e.target.value})}
-                          className="w-full p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-400 focus:outline-none text-sm font-medium cursor-pointer"
+                          className="w-full max-w-full box-border p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-400 focus:outline-none text-sm font-medium m-0 block"
                         >
                           <option value="เข้างาน (IN)">{lang === 'TH' ? 'เข้างาน (IN)' : 'Clock In (IN)'}</option>
                           <option value="ออกงาน (OUT)">{lang === 'TH' ? 'ออกงาน (OUT)' : 'Clock Out (OUT)'}</option>
                         </select>
                       </div>
                     </div>
-                    <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-4">
-                      <div className="w-full min-w-0">
+                    <div className="flex flex-col sm:flex-row items-center gap-3 sm:gap-4 w-full">
+                      <div className="w-full min-w-0 flex-1">
                         <label className="block text-xs font-bold text-slate-700 mb-1">{t.modalAdjOldTime}</label>
                         <input 
-                          type="text" 
-                          onFocus={(e) => (e.target.type = "time")}
-                          onBlur={(e) => { if (!e.target.value) e.target.type = "text"; }}
-                          placeholder="เช่น 09:00"
+                          type="time" 
                           value={adjustForm.oldTime}
                           onChange={(e) => setAdjustForm({...adjustForm, oldTime: e.target.value})}
-                          className="w-full p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-400 focus:outline-none text-sm placeholder-slate-400 font-medium" 
+                          className="w-full max-w-full box-border p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-400 focus:outline-none text-sm font-medium appearance-none m-0 block" 
                         />
                       </div>
                       <div className="hidden sm:block text-slate-300 font-bold mt-5">→</div>
                       <div className="block sm:hidden text-slate-300 font-bold rotate-90 my-1 text-lg">→</div>
-                      <div className="w-full min-w-0">
+                      <div className="w-full min-w-0 flex-1">
                         <label className="block text-xs font-bold text-slate-700 mb-1">{t.modalAdjNewTime}</label>
                         <input 
-                          type="text" 
-                          onFocus={(e) => (e.target.type = "time")}
-                          onBlur={(e) => { if (!e.target.value) e.target.type = "text"; }}
-                          placeholder="เช่น 10:30"
+                          type="time" 
                           required 
                           value={adjustForm.newTime}
                           onChange={(e) => setAdjustForm({...adjustForm, newTime: e.target.value})}
-                          className="w-full p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-400 focus:outline-none text-sm placeholder-slate-400 font-medium" 
+                          className="w-full max-w-full box-border p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-400 focus:outline-none text-sm font-medium appearance-none m-0 block" 
                         />
                       </div>
                     </div>
@@ -13444,12 +14977,12 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                   placeholder={t.modalAdjReasonHolder}
                   value={adjustForm.reason}
                   onChange={(e) => setAdjustForm({...adjustForm, reason: e.target.value})}
-                  className="w-full p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-400 focus:outline-none resize-none text-sm placeholder-slate-400 font-medium"
+                  className="w-full max-w-full box-border p-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-400 focus:outline-none resize-none text-sm placeholder-slate-400 font-medium"
                 ></textarea>
               </div>
 
-              {/* 🔥 Action Buttons (ตบบนล่างในมือถือ) */}
-              <div className="flex flex-col sm:flex-row gap-3 pt-2 w-full min-w-0">
+              {/* 🔥 Action Buttons */}
+              <div className="flex flex-col sm:flex-row gap-3 pt-2 w-full">
                 <button 
                   type="submit" 
                   disabled={isSubmitting}
@@ -13575,10 +15108,42 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
         </div>
       )}
 
-{/* 💸 MODAL: สร้างสลิปเงินเดือน (Admin/CEO) */}
+{/* 💸 MODAL: สร้างสลิปเงินเดือน (Admin/CEO) - ฉบับจัดเต็ม + รอบตัดวีคพิเศษ (PL004) */}
       {isPayrollModalOpen && (() => {
-        const selectedEmp = employees.find(e => e.id === payrollForm.employee_id);
+        
+        // 🚀 บังคับเอาพนักงานทั้งหมดมาเรียงลำดับรหัส PL ให้โชว์ครบทุกคน 100%
+        const allSortedEmployees = [...(employees || [])].sort((a, b) => {
+          const codeA = String(a.employee_code || "");
+          const codeB = String(b.employee_code || "");
+          return codeA.localeCompare(codeB, undefined, { numeric: true, sensitivity: 'base' });
+        });
+
+        const selectedEmp = employees.find(e => String(e.id) === String(payrollForm.employee_id));
         const isPT = selectedEmp?.salary_type === 'Part-time';
+
+        const defaultOTRate = isPT ? (selectedEmp?.hourly_rate || 0) : Math.round((Number(payrollForm.manual_base_salary || payrollForm.base_salary || 0) / 30 / 8));
+        const currentOTRate = payrollForm.ot_hourly_rate !== undefined ? Number(payrollForm.ot_hourly_rate) : defaultOTRate;
+
+        const recalcOT = (h, m, mult, customRate) => {
+          const hrs = Number(h || 0); const mins = Number(m || 0); const rate = Number(mult || 1.5);
+          const totalH = hrs + (mins / 60); const perHr = Number(customRate !== undefined ? customRate : currentOTRate);
+          return totalH > 0 ? (totalH * perHr * rate) : 0;
+        };
+
+        const currentBase = Number(payrollForm.manual_base_salary || payrollForm.base_salary || 0);
+        const hasOTTime = Number(payrollForm.ot_hours || 0) > 0 || Number(payrollForm.ot_mins || 0) > 0;
+        const currentOT = hasOTTime ? Number(payrollForm.ot_amount || 0) : 0;
+        const currentBonus = Number(payrollForm.bonus || 0);
+        const currentComm = Number(payrollForm.commission || 0);
+        
+        const currentTotalEarnings = currentBase + currentOT + currentBonus + currentComm;
+
+        const currentLate = Number(payrollForm.manual_late_deduct || 0);
+        const currentSSO = Number(payrollForm.social_security || 0);
+        const currentTax = Number(payrollForm.tax || 0);
+        const currentDeduct = Number(payrollForm.deductions || 0);
+        
+        const currentNetSalary = (currentTotalEarnings - currentLate - currentSSO - currentTax - currentDeduct);
 
         return (
           <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm">
@@ -13589,35 +15154,10 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                 </h3>
                 
                 <div className="flex flex-wrap items-center gap-2">
-                  <button 
-                    type="button"
-                    onClick={handleExportBankCSV}
-                    className="bg-emerald-50 hover:bg-emerald-100 text-emerald-600 border border-emerald-200 px-3 py-1.5 rounded-lg font-bold text-xs transition-all shadow-sm flex items-center gap-1.5"
-                    title="ดาวน์โหลดไฟล์สำหรับอัปโหลดเข้าธนาคาร"
-                  >
+                  <button type="button" onClick={handleExportBankCSV} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-600 border border-emerald-200 px-3 py-1.5 rounded-lg font-bold text-xs transition-all shadow-sm flex items-center gap-1.5">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
                     Export โอนเงิน
                   </button>
-
-                  <button 
-                    type="button"
-                    onClick={() => {
-                      // 🟢 แก้ไขตรงนี้: เปลี่ยนจาก payrollData เป็น adminPayrollSlips ให้ตรงกับฐานข้อมูลจริง
-                      const monthPayrolls = adminPayrollSlips.filter(p => p.month === payrollFilterMonth);
-                      const empsWithoutPayroll = employees.filter(e => !monthPayrolls.some(p => p.employee_id === e.id));
-                      
-                      if (empsWithoutPayroll.length === 0) {
-                        Swal.fire({ icon: 'info', title: 'ครบถ้วน', text: 'พนักงานทุกคนมียอดเงินเดือนของเดือนนี้แล้ว' });
-                        return;
-                      }
-                      setSelectedEmps(empsWithoutPayroll.map(e => e.id));
-                      setShowAutoPayrollModal(true);
-                    }}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg font-bold text-xs transition-all shadow-sm flex items-center gap-1.5"
-                  >
-                    ✨ ทำสลิปอัตโนมัติ
-                  </button>
-
                   <button onClick={() => setIsPayrollModalOpen(false)} className="w-8 h-8 flex items-center justify-center bg-white text-slate-400 border border-slate-200 rounded-full hover:bg-rose-500 hover:text-white hover:border-rose-500 font-bold transition-all shadow-sm ml-1">✕</button>
                 </div>
               </div>
@@ -13632,54 +15172,96 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                         value={payrollForm.employee_id} 
                         onChange={(e) => {
                           const empId = e.target.value;
-                          const selected = employees.find(emp => emp.id === empId);
-                          const _isPT = selected?.salary_type === 'Part-time';
-                          const base = selected ? (_isPT ? (selected.hourly_rate || 0) : (selected.base_salary || 0)) : 0;
+                          const selected = employees.find(emp => String(emp.id) === String(empId));
+                          if (!selected) return;
+
+                          const _isPT = selected.salary_type === 'Part-time' || (selected.hourly_rate > 0);
+                          const base = _isPT ? (selected.hourly_rate || 0) : (selected.base_salary || 0);
                           
                           const rate = payrollForm.sso_rate ?? 5;
                           const maxBase = payrollForm.sso_max ?? 17500;
-                          const sso = (selected && selected.has_social_security !== false && !_isPT) ? Math.round(Math.min(base, maxBase) * (rate / 100)) : 0;
                           
-                          let tax = 0;
-                          if (!_isPT && base > 0) {
-                            const annual = base * 12;
-                            const expenses = Math.min(annual * 0.5, 100000); 
-                            let net = annual - expenses - 60000; 
-                            if (net > 150000) {
-                              if (net > 5000000) { tax += (net - 5000000) * 0.35; net = 5000000; }
-                              if (net > 2000000) { tax += (net - 2000000) * 0.30; net = 2000000; }
-                              if (net > 1000000) { tax += (net - 1000000) * 0.25; net = 1000000; }
-                              if (net > 750000) { tax += (net - 750000) * 0.20; net = 750000; }
-                              if (net > 500000) { tax += (net - 500000) * 0.15; net = 500000; }
-                              if (net > 300000) { tax += (net - 300000) * 0.10; net = 300000; }
-                              if (net > 150000) { tax += (net - 150000) * 0.05; }
+                          const sso = (selected.has_social_security !== false && !_isPT) ? Math.round(Math.min(base, maxBase) * (rate / 100)) : 0;
+                          const tax = (base * 0.03).toFixed(2);
+                          
+                          // 🚀 [เพิ่มฟีเจอร์] คำนวณวันที่เริ่มต้น-สิ้นสุด อัตโนมัติ
+                          const [selYear, selMonth] = (payrollFilterMonth || new Date().toISOString().slice(0, 7)).split('-');
+                          const y = parseInt(selYear, 10); const m = parseInt(selMonth, 10);
+                          let pM = m - 1; let pY = y;
+                          if (pM === 0) { pM = 12; pY--; }
+
+                          let sDate = `${pY}-${String(pM).padStart(2, '0')}-26`;
+                          let eDate = `${y}-${String(m).padStart(2, '0')}-25`;
+
+                          // 🌟 กฎพิเศษของคุณกาญจนา PL004
+                          if (selected.employee_code === 'PL004') {
+                            const today = new Date().getDate();
+                            if (today > 15) {
+                              sDate = `${y}-${String(m).padStart(2, '0')}-16`; // รอบ 16 - 25
+                              eDate = `${y}-${String(m).padStart(2, '0')}-25`;
+                            } else {
+                              sDate = `${pY}-${String(pM).padStart(2, '0')}-26`; // รอบ 26 - 15
+                              eDate = `${y}-${String(m).padStart(2, '0')}-15`;
                             }
-                            tax = Math.round(tax / 12); 
                           }
-                          setPayrollForm({ ...payrollForm, employee_id: empId, base_salary: base, social_security: sso, tax: tax, is_previewed: false });
+
+                          setPayrollForm({ 
+                            ...payrollForm, 
+                            employee_id: empId, 
+                            base_salary: base, 
+                            manual_base_salary: base,
+                            social_security: sso, 
+                            tax: tax, 
+                            is_previewed: false, 
+                            ot_hourly_rate: undefined,
+                            ot_amount: 0, ot_hours: 0, ot_mins: 0, bonus: 0, commission: 0, deductions: 0, manual_late_deduct: 0,
+                            start_date: sDate,  // 👈 บันทึกวันเริ่มต้น
+                            end_date: eDate     // 👈 บันทึกวันสิ้นสุด
+                          });
                         }} 
                         className="w-full bg-white border-2 border-slate-200 rounded-xl px-4 py-3 font-bold outline-none text-slate-700 focus:border-emerald-400 shadow-sm cursor-pointer"
                       >
                         <option value="">-- เลือกพนักงาน --</option>
-                        {employees.map(emp => (
-                          <option key={emp.id} value={emp.id}>
-                            {emp.employee_code} - {emp.full_name} {emp.nickname ? `(${emp.nickname})` : ''} [{emp.salary_type}]
-                          </option>
-                        ))}
+                        {allSortedEmployees.map(emp => {
+                          const isActive = emp.is_active !== false && String(emp.is_active).toLowerCase() !== 'false' && emp.is_active !== null;
+                          return (
+                            <option 
+                              key={emp.id} 
+                              value={emp.id}
+                              className={isActive ? "text-slate-800 font-bold" : "text-slate-400 line-through bg-slate-50 italic"}
+                            >
+                              {emp.employee_code} - {emp.full_name} {emp.nickname ? `(${emp.nickname})` : ''} [{emp.salary_type || (emp.hourly_rate ? 'Part-time' : 'Full-time')}]
+                              {!isActive ? ' ❌ (ระงับ/ลาออก)' : ''}
+                            </option>
+                          );
+                        })}
                       </select>
                     </div>
                     <div>
                       <label className="text-[11px] font-black text-slate-500 mb-1 block uppercase tracking-widest">📅 รอบบิล (เดือน)</label>
-                      <input
-                        type="month"
-                        value={payrollFilterMonth}
-                        onChange={(e) => setPayrollFilterMonth(e.target.value)}
-                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 font-bold text-slate-700 outline-none focus:border-indigo-500 shadow-sm"
-                      />
+                      <input type="month" value={payrollFilterMonth} onChange={(e) => setPayrollFilterMonth(e.target.value)} className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 font-bold text-slate-700 outline-none focus:border-indigo-500 shadow-sm" />
                     </div>
                   </div>
 
-                  {/* ✨ กล่อง PREVIEW แบบใหม่ (สามารถพิมพ์แก้ไขตัวเลขได้ทุกช่อง) */}
+                  {/* 🚀 เพิ่มช่องปรับรอบวันที่ตัดวีคให้มองเห็นได้ชัดเจน */}
+                  {payrollForm.employee_id && (
+                    <div className="grid grid-cols-2 gap-4 p-4 bg-indigo-50/50 border border-indigo-100 rounded-2xl animate-fade-in relative">
+                      {selectedEmp?.employee_code === 'PL004' && (
+                        <div className="absolute -top-3 left-4 bg-amber-500 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-md animate-bounce">
+                          ✨ รอบตัดวีคพิเศษ PL004
+                        </div>
+                      )}
+                      <div>
+                        <label className="text-[10px] font-black text-indigo-800 mb-1 block uppercase tracking-widest">เริ่มคำนวณตั้งแต่วันที่</label>
+                        <input type="date" value={payrollForm.start_date || ''} onChange={(e) => setPayrollForm({...payrollForm, start_date: e.target.value})} className="w-full bg-white border border-indigo-200 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-indigo-500 shadow-sm" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black text-indigo-800 mb-1 block uppercase tracking-widest">ถึงวันที่ (ตัดรอบ)</label>
+                        <input type="date" value={payrollForm.end_date || ''} onChange={(e) => setPayrollForm({...payrollForm, end_date: e.target.value})} className="w-full bg-white border border-indigo-200 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-indigo-500 shadow-sm" />
+                      </div>
+                    </div>
+                  )}
+
                   <div className="bg-slate-50 border-2 border-slate-200 rounded-2xl shadow-sm overflow-hidden">
                     <div className="bg-slate-100 p-3 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-200">
                       <div className="flex items-center gap-2">
@@ -13688,147 +15270,192 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                       </div>
                       <button type="button" onClick={handlePreviewAttendance} className="w-full sm:w-auto px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 transition-colors flex items-center justify-center gap-1 shadow-md">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-                        ดึงข้อมูลสแกนนิ้วล่าสุด
+                        ดึงข้อมูลสแกนนิ้ว ({payrollForm.start_date ? `${payrollForm.start_date.slice(-2)} - ${payrollForm.end_date.slice(-2)}` : '26-25'})
                       </button>
                     </div>
                     
                     {payrollForm.is_previewed ? (
-                      <div className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 animate-fade-in bg-white">
-                        
-                        {/* 🟢 ช่อง 1: ชั่วโมงทำงานรวม */}
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-black text-slate-400 uppercase flex justify-between">
-                            เวลาทำรวม (ชม.)
-                            <span className="text-indigo-400 text-[9px]">*แก้ได้</span>
+                      <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 animate-fade-in bg-white">
+                        <div className="space-y-1 lg:col-span-3">
+                          <label className="text-[10px] font-black text-slate-400 uppercase flex justify-between px-1">
+                            เวลาทำงานสะสม (รอบบิลนี้)
+                            <span className="text-indigo-400 text-[9px] font-black">*แก้ไขได้</span>
                           </label>
-                          <input 
-                            type="number" step="0.5"
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-black text-indigo-700 focus:bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 outline-none transition-all"
-                            value={payrollForm.manual_work_hours ?? ''}
-                            onChange={(e) => {
-                              const hrs = Number(e.target.value);
-                              const hRate = Number(employees.find(em => em.id === payrollForm.employee_id)?.hourly_rate) || 0;
-                              // ถ้าเป็น Part-time ให้คูณเงินอัตโนมัติเมื่อเปลี่ยนชั่วโมง
-                              if (isPT) {
-                                setPayrollForm({ ...payrollForm, manual_work_hours: e.target.value, manual_base_salary: Math.round(hrs * hRate) });
-                              } else {
-                                setPayrollForm({ ...payrollForm, manual_work_hours: e.target.value });
-                              }
-                            }}
-                          />
+                          <div className="flex gap-2">
+                            <div className="relative flex-1">
+                              <input type="number" min="0" className="w-full bg-slate-50 border-2 border-slate-200 rounded-2xl py-4 pr-10 font-black text-indigo-700 focus:bg-white focus:border-indigo-500 outline-none transition-all text-center text-3xl shadow-inner tabular-nums" value={payrollForm.manual_work_hours ?? ''} onChange={(e) => {
+                                  const hrs = Number(e.target.value); const mins = Number(payrollForm.manual_work_mins || 0); const hRate = Number(employees.find(em => em.id === payrollForm.employee_id)?.hourly_rate) || 0;
+                                  let updates = { manual_work_hours: e.target.value }; if (isPT) updates.manual_base_salary = Math.round((((hrs * 60) + mins) * hRate) / 60); setPayrollForm({ ...payrollForm, ...updates });
+                                }} />
+                              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-black uppercase">ชม.</span>
+                            </div>
+                            <div className="relative w-[130px]">
+                              <input type="number" min="0" max="59" className="w-full bg-slate-50 border-2 border-slate-200 rounded-2xl py-4 pr-12 font-black text-indigo-700 focus:bg-white focus:border-indigo-500 outline-none transition-all text-center text-3xl shadow-inner tabular-nums" value={payrollForm.manual_work_mins ?? ''} onChange={(e) => {
+                                  const mins = Number(e.target.value); const hrs = Number(payrollForm.manual_work_hours || 0); const hRate = Number(employees.find(em => em.id === payrollForm.employee_id)?.hourly_rate) || 0;
+                                  let updates = { manual_work_mins: e.target.value }; if (isPT) updates.manual_base_salary = Math.round((((hrs * 60) + mins) * hRate) / 60); setPayrollForm({ ...payrollForm, ...updates });
+                                }} />
+                              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-black uppercase">นาที</span>
+                            </div>
+                          </div>
                         </div>
 
-                        {/* 🟢 ช่อง 2: ค่าจ้าง / ฐานเงินเดือน */}
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-black text-emerald-600 uppercase flex justify-between">
-                            {isPT ? 'ค่าจ้างเบื้องต้น (฿)' : 'ฐานเงินเดือน (฿)'}
-                            <span className="text-emerald-400 text-[9px]">*แก้ได้</span>
-                          </label>
-                          <input 
-                            type="number" 
-                            className="w-full bg-emerald-50 border border-emerald-100 rounded-xl p-3 font-black text-emerald-700 focus:bg-white focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 outline-none transition-all"
-                            value={payrollForm.manual_base_salary ?? ''}
-                            onChange={(e) => setPayrollForm({ ...payrollForm, manual_base_salary: e.target.value })}
-                          />
+                        <div className="space-y-1 lg:col-span-1">
+                          <label className="text-[10px] font-black text-emerald-600 uppercase text-center block">ค่าจ้าง (฿)</label>
+                          <input type="number" className="w-full bg-emerald-50 border border-emerald-100 rounded-2xl py-4 font-black text-emerald-700 focus:bg-white focus:border-emerald-400 outline-none transition-all text-center text-xl h-[72px]" value={payrollForm.manual_base_salary ?? ''} onChange={(e) => setPayrollForm({ ...payrollForm, manual_base_salary: e.target.value })} />
                         </div>
 
-                        {/* 🟢 ช่อง 3: สาย (นาที) */}
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-black text-slate-400 uppercase flex justify-between">
-                            สายสะสม (นาที)
-                            <span className="text-rose-400 text-[9px]">*แก้ได้</span>
-                          </label>
-                          <input 
-                            type="number" 
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-black text-rose-500 focus:bg-white focus:border-rose-400 focus:ring-2 focus:ring-rose-100 outline-none transition-all"
-                            value={payrollForm.manual_late_mins ?? ''}
-                            onChange={(e) => {
-                              const mins = Number(e.target.value);
-                              const base = Number(payrollForm.manual_base_salary || payrollForm.base_salary || 0);
-                              const ratePerMin = base / 30 / 8 / 60;
-                              // คำนวณเงินหักอัตโนมัติเมื่อแก้นาทีสาย
-                              const autoDeduct = isPT ? 0 : Math.round(mins * ratePerMin);
-                              setPayrollForm({ ...payrollForm, manual_late_mins: e.target.value, manual_late_deduct: autoDeduct });
-                            }}
-                          />
+                        <div className="space-y-1 lg:col-span-1">
+                          <label className="text-[10px] font-black text-slate-400 uppercase text-center block">สาย (นาที)</label>
+                          <input type="number" readOnly className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 font-black text-rose-500 text-center text-lg h-[72px] opacity-60" value={payrollForm.manual_late_mins ?? '0'} />
                         </div>
 
-                        {/* 🟢 ช่อง 4: หักสาย (บาท) */}
-                        <div className="space-y-1">
-                          <label className="text-[10px] font-black text-rose-600 uppercase flex justify-between">
-                            หักสาย (฿)
-                            <span className="text-rose-400 text-[9px]">*แก้ได้</span>
-                          </label>
-                          <input 
-                            type="number" 
-                            className="w-full bg-rose-50 border border-rose-100 rounded-xl p-3 font-black text-rose-600 focus:bg-white focus:border-rose-400 focus:ring-2 focus:ring-rose-100 outline-none transition-all"
-                            value={payrollForm.manual_late_deduct ?? ''}
-                            onChange={(e) => setPayrollForm({ ...payrollForm, manual_late_deduct: e.target.value })}
-                          />
+                        <div className="space-y-1 lg:col-span-1">
+                          <label className="text-[10px] font-black text-rose-600 uppercase text-center block">หักสาย (฿)</label>
+                          <input type="number" readOnly className="w-full bg-rose-50 border border-rose-100 rounded-2xl py-4 font-black text-rose-600 text-center text-lg h-[72px] opacity-60" value={payrollForm.manual_late_deduct ?? '0'} />
                         </div>
-
                       </div>
                     ) : (
                       <div className="p-8 text-center bg-white flex flex-col items-center justify-center gap-2">
                         <span className="text-3xl opacity-50">🤖</span>
-                        <p className="text-slate-400 text-xs font-bold">กดปุ่ม "ดึงข้อมูลสแกนนิ้วล่าสุด" ด้านบน <br/> เพื่อคำนวณเวลาและค่าจ้างอัตโนมัติ</p>
+                        <p className="text-slate-400 text-xs font-bold">กดปุ่ม "ดึงข้อมูลสแกนนิ้วล่าสุด" ด้านบน <br/> เพื่อคำนวณยอดเวลาทำงาน</p>
                       </div>
                     )}
                   </div>
 
-                  {/* รายรับอื่นๆ (OT / โบนัส) */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
-                    <div>
-                      <label className="text-[11px] font-black text-slate-500 mb-1 flex justify-between">
-                        <span>⏱️ ล่วงเวลา (OT)</span>
-                        <span className="text-emerald-500">แนะนำ: {payrollForm.preview_ot_hours || 0} ชม.</span>
-                      </label>
-                      <div className="flex gap-2">
-                        <div className="relative w-1/2">
-                          <input type="number" step="0.5" placeholder="ชม." value={payrollForm.ot_hours ?? ''} onChange={(e) => {
-                              const hrs = e.target.value;
-                              const rate = (Number(payrollForm.manual_base_salary || payrollForm.base_salary) / 30 / 8) * 1.5;
-                              const autoPay = selectedEmp?.salary_type === 'Part-time' ? 0 : Math.round(Number(hrs) * rate);
-                              setPayrollForm({...payrollForm, ot_hours: hrs, ot_amount: autoPay});
-                          }} className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-3 pr-8 py-3 font-black text-indigo-600 outline-none focus:bg-white shadow-inner" />
-                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-bold">ชม.</span>
-                        </div>
-                        <div className="relative w-1/2">
-                          <input type="number" placeholder="บาท" value={payrollForm.ot_amount ?? ''} onChange={(e) => setPayrollForm({...payrollForm, ot_amount: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-3 pr-8 py-3 font-black text-indigo-600 outline-none focus:bg-white shadow-inner" />
-                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-bold">฿</span>
-                        </div>
+                  {/* ⏱️ คำนวณค่าล่วงเวลา (OT) */}
+                  <div className="bg-indigo-50/40 p-4 border border-indigo-100 rounded-2xl shadow-sm mt-4">
+                    <label className="text-[11px] font-black text-indigo-800 mb-3 flex items-center gap-2 uppercase tracking-widest">
+                      <span>⏱️ คำนวณค่าล่วงเวลา (OT)</span>
+                      <span className="text-indigo-400 text-[9px] bg-white px-2 py-0.5 rounded-full border border-indigo-100 shadow-sm lowercase">Auto-calculate</span>
+                    </label>
+                    <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                      
+                      <div className="relative">
+                        <label className="text-[9px] font-black text-slate-500 mb-1 block">ค่าแรง/ชม.</label>
+                        <input 
+                          type="number" min="0" placeholder="0" 
+                          value={currentOTRate}
+                          onChange={(e) => {
+                            const rateVal = e.target.value;
+                            const autoPay = recalcOT(payrollForm.ot_hours, payrollForm.ot_mins, payrollForm.ot_multiplier, rateVal);
+                            setPayrollForm({...payrollForm, ot_hourly_rate: rateVal, ot_amount: autoPay});
+                          }} 
+                          className="w-full bg-white border border-slate-200 rounded-xl pl-3 pr-6 py-2.5 font-black text-indigo-600 outline-none focus:border-indigo-400 shadow-sm text-sm" 
+                        />
+                        <span className="absolute right-2.5 top-[26px] text-[10px] text-slate-400 font-bold">฿</span>
                       </div>
+
+                      <div className="relative">
+                        <label className="text-[9px] font-black text-slate-500 mb-1 block">ชั่วโมง</label>
+                        <input 
+                          type="number" min="0" placeholder="0" 
+                          value={payrollForm.ot_hours ?? ''} 
+                          onChange={(e) => {
+                            const h = e.target.value;
+                            const autoPay = recalcOT(h, payrollForm.ot_mins, payrollForm.ot_multiplier, currentOTRate);
+                            setPayrollForm({...payrollForm, ot_hours: h, ot_amount: autoPay});
+                          }} 
+                          className="w-full bg-white border border-slate-200 rounded-xl pl-3 pr-8 py-2.5 font-black text-indigo-600 outline-none focus:border-indigo-400 shadow-sm text-sm" 
+                        />
+                        <span className="absolute right-3 top-[26px] text-[10px] text-slate-400 font-bold">ชม.</span>
+                      </div>
+                      
+                      <div className="relative">
+                        <label className="text-[9px] font-black text-slate-500 mb-1 block">นาที</label>
+                        <input 
+                          type="number" min="0" max="59" placeholder="0" 
+                          value={payrollForm.ot_mins ?? ''} 
+                          onChange={(e) => {
+                            const m = e.target.value;
+                            const autoPay = recalcOT(payrollForm.ot_hours, m, payrollForm.ot_multiplier, currentOTRate);
+                            setPayrollForm({...payrollForm, ot_mins: m, ot_amount: autoPay});
+                          }} 
+                          className="w-full bg-white border border-slate-200 rounded-xl pl-3 pr-8 py-2.5 font-black text-indigo-600 outline-none focus:border-indigo-400 shadow-sm text-sm" 
+                        />
+                        <span className="absolute right-3 top-[26px] text-[10px] text-slate-400 font-bold">น.</span>
+                      </div>
+
+                      <div className="relative lg:col-span-2">
+                        <label className="text-[9px] font-black text-slate-500 mb-1 block">เรท (คูณ)</label>
+                        <select 
+                          value={payrollForm.ot_multiplier || "1.5"} 
+                          onChange={(e) => {
+                            const mult = e.target.value;
+                            const autoPay = recalcOT(payrollForm.ot_hours, payrollForm.ot_mins, mult, currentOTRate);
+                            setPayrollForm({...payrollForm, ot_multiplier: mult, ot_amount: autoPay});
+                          }} 
+                          className="w-full bg-white border border-slate-200 rounded-xl px-2 py-2.5 font-black text-rose-500 outline-none focus:border-rose-400 shadow-sm text-[10px] cursor-pointer"
+                        >
+                          <option value="1">1 แรง (ทำงานในวันหยุด - ในเวลาปกติ)</option>
+                          <option value="1.5">1.5 แรง (OT วันธรรมดา - นอกเวลาทำงาน)</option>
+                          <option value="2">2 แรง (ทำงานในวันหยุด - นอกเวลาปกติ)</option>
+                          <option value="3">3 แรง (OT วันหยุด - นอกเวลาทำงาน)</option>
+                        </select>
+                      </div>
+
                     </div>
-                    <div><label className="text-[11px] font-black text-slate-500 mb-1 block">🎁 โบนัส / เบี้ยขยัน</label><input type="number" placeholder="0" value={payrollForm.bonus} onChange={(e) => setPayrollForm({...payrollForm, bonus: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-black text-indigo-600 outline-none focus:bg-white shadow-inner" /></div>
+
+                    <div className="mt-3 relative w-full lg:w-1/3 ml-auto">
+                        <label className="text-[9px] font-black text-emerald-600 mb-1 block text-right">ยอดเงิน OT (฿) *แก้ได้</label>
+                        <div className="relative">
+                            <input 
+                              type="number" placeholder="0" 
+                              value={payrollForm.ot_amount ?? ''} 
+                              onChange={(e) => setPayrollForm({...payrollForm, ot_amount: e.target.value})} 
+                              className="w-full bg-emerald-50 border border-emerald-200 rounded-xl pl-3 pr-6 py-2.5 font-black text-emerald-700 outline-none focus:bg-white shadow-sm text-sm text-right" 
+                            />
+                            <span className="absolute right-2.5 top-[10px] text-[10px] text-emerald-500 font-bold">฿</span>
+                        </div>
+                    </div>
                   </div>
 
-                  {!isPT && (
-                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl shadow-sm space-y-4">
-                      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-2">
-                        <h4 className="text-xs font-black text-rose-800 flex items-center gap-2">🔻 ภาษีและประกันสังคม</h4>
-                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-rose-600 bg-rose-100/60 px-3 py-2 rounded-xl border border-rose-200 shadow-sm">
-                          ⚙️ เรทหัก:
-                          <input type="number" value={payrollForm.sso_rate ?? 5} onChange={(e) => {
-                              const newRate = Number(e.target.value);
-                              const newMax = payrollForm.sso_max ?? 17500;
-                              const base = Number(payrollForm.manual_base_salary || payrollForm.base_salary || 0);
-                              const newSso = Math.round(Math.min(base, newMax) * (newRate / 100));
-                              setPayrollForm({...payrollForm, sso_rate: newRate, social_security: newSso});
-                            }} className="w-10 bg-white text-center rounded-md border border-rose-200 outline-none focus:border-rose-400 py-0.5 font-black" /> % 
-                          <span className="text-rose-300 mx-1">|</span>
-                          เพดาน: 
-                          <input type="number" value={payrollForm.sso_max ?? 17500} onChange={(e) => {
-                              const newMax = Number(e.target.value);
-                              const newRate = payrollForm.sso_rate ?? 5;
-                              const base = Number(payrollForm.manual_base_salary || payrollForm.base_salary || 0);
-                              const newSso = Math.round(Math.min(base, newMax) * (newRate / 100));
-                              setPayrollForm({...payrollForm, sso_max: newMax, social_security: newSso});
-                            }} className="w-16 bg-white text-center rounded-md border border-rose-200 outline-none focus:border-rose-400 py-0.5 font-black" /> ฿
-                        </div>
-                      </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
+                    <div>
+                      <label className="text-[11px] font-black text-slate-500 mb-1 block">🎁 โบนัส / เบี้ยขยัน</label>
+                      <input type="number" placeholder="0" value={payrollForm.bonus ?? ''} onChange={(e) => setPayrollForm({...payrollForm, bonus: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 font-black text-indigo-600 outline-none focus:bg-white shadow-inner" />
+                    </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
+                    <div>
+                      <label className="text-[11px] font-black text-slate-500 mb-1 block">💰 ค่าคอมมิชชัน <span className="text-indigo-400 text-[9px]">*แก้ได้</span></label>
+                      <div className="relative">
+                        <input 
+                          type="number" step="0.01" placeholder="0.00" 
+                          value={payrollForm.commission ?? ''} 
+                          onChange={(e) => setPayrollForm({...payrollForm, commission: e.target.value})} 
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-3 pr-6 py-3 font-black text-emerald-600 outline-none focus:bg-white shadow-inner" 
+                        />
+                        <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-bold">฿</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 🔻 ภาษีและประกันสังคม */}
+                  <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl shadow-sm space-y-4">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-2">
+                      <h4 className="text-xs font-black text-rose-800 flex items-center gap-2">🔻 ภาษีและประกันสังคม</h4>
+                      <div className="flex items-center gap-1.5 text-[10px] font-bold text-rose-600 bg-rose-100/60 px-3 py-2 rounded-xl border border-rose-200 shadow-sm">
+                        ⚙️ เรทหัก:
+                        <input type="number" value={payrollForm.sso_rate ?? 5} onChange={(e) => {
+                            const newRate = Number(e.target.value);
+                            const newMax = payrollForm.sso_max ?? 17500;
+                            const base = Number(payrollForm.manual_base_salary || payrollForm.base_salary || 0);
+                            const newSso = Math.round(Math.min(base, newMax) * (newRate / 100));
+                            setPayrollForm({...payrollForm, sso_rate: newRate, social_security: newSso});
+                          }} className="w-10 bg-white text-center rounded-md border border-rose-200 outline-none focus:border-rose-400 py-0.5 font-black" /> % 
+                        <span className="text-rose-300 mx-1">|</span>
+                        เพดาน: 
+                        <input type="number" value={payrollForm.sso_max ?? 17500} onChange={(e) => {
+                            const newMax = Number(e.target.value);
+                            const newRate = payrollForm.sso_rate ?? 5;
+                            const base = Number(payrollForm.manual_base_salary || payrollForm.base_salary || 0);
+                            const newSso = Math.round(Math.min(base, newMax) * (newRate / 100));
+                            setPayrollForm({...payrollForm, sso_max: newMax, social_security: newSso});
+                          }} className="w-16 bg-white text-center rounded-md border border-rose-200 outline-none focus:border-rose-400 py-0.5 font-black" /> ฿
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
                         <label className="text-[11px] font-black text-slate-500 mb-1 flex justify-between items-center">
                           <span>🛡️ หักประกันสังคม</span>
                           <button 
@@ -13849,25 +15476,49 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                           <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-bold">฿</span>
                         </div>
                       </div>
-                        <div>
-                          <label className="text-[11px] font-black text-rose-600 mb-1 block">🏛️ หักภาษี ณ ที่จ่าย</label>
-                          <input type="number" placeholder="0" value={payrollForm.tax || ''} onChange={(e) => setPayrollForm({...payrollForm, tax: e.target.value})} className="w-full bg-white border border-rose-200 rounded-xl px-4 py-2.5 font-black text-rose-600 outline-none focus:border-rose-400 shadow-sm" />
-                        </div>
+                      
+                      <div>
+                        <label className="text-[11px] font-black text-rose-600 mb-1 flex justify-between items-center">
+                          <span>🏛️ หักภาษี ณ ที่จ่าย</span>
+                          <button 
+                            type="button"
+                            onClick={() => setPayrollForm({...payrollForm, tax: (currentTotalEarnings * 0.03).toFixed(2)})}
+                            className="text-[10px] bg-rose-100 text-rose-600 px-2 py-1 rounded-lg hover:bg-rose-200 transition-colors font-bold shadow-sm"
+                          >
+                            ✨ คำนวณ 3% (ยอดรวม)
+                          </button>
+                        </label>
+                        <input type="number" placeholder="0.00" value={payrollForm.tax || ''} onChange={(e) => setPayrollForm({...payrollForm, tax: e.target.value})} className="w-full bg-white border border-rose-200 rounded-xl px-4 py-2.5 font-black text-rose-600 outline-none focus:border-rose-400 shadow-sm" />
                       </div>
                     </div>
-                  )}
+                  </div>
 
                   <div className="bg-amber-50 p-4 border border-amber-200 rounded-2xl shadow-sm">
                     <label className="text-[11px] font-black text-amber-800 mb-1 block">➖ รายการหักอื่นๆ (แอดมินพิมพ์เพิ่มเอง)</label>
-                    <input type="number" placeholder="0" value={payrollForm.deductions} onChange={(e) => setPayrollForm({...payrollForm, deductions: e.target.value})} className="w-full bg-white border border-amber-200 rounded-xl px-4 py-3 font-black text-amber-700 outline-none focus:border-amber-400 shadow-inner" />
+                    <input type="number" placeholder="0" value={payrollForm.deductions ?? ''} onChange={(e) => setPayrollForm({...payrollForm, deductions: e.target.value})} className="w-full bg-white border border-amber-200 rounded-xl px-4 py-3 font-black text-amber-700 outline-none focus:border-amber-400 shadow-inner" />
                   </div>
+                  
+                  <div className={`mt-6 p-6 rounded-2xl shadow-lg flex flex-col sm:flex-row justify-between items-center gap-4 ${isPT ? 'bg-gradient-to-r from-purple-600 to-indigo-600' : 'bg-gradient-to-r from-emerald-500 to-teal-500'} text-white border-2 border-white/20 relative overflow-hidden`}>
+                    <div className="absolute -right-10 -top-10 text-9xl opacity-10">💰</div>
+                    <div className="relative z-10 text-center sm:text-left">
+                      <h4 className="text-sm font-black text-white/90 uppercase tracking-widest">ยอดรับสุทธิ (Net Salary)</h4>
+                      <p className="text-[11px] font-bold text-white/70 mt-1">ระบบประมวลผลรายได้และรายการหักอัตโนมัติ อย่างครบถ้วนและแม่นยำ</p>
+                    </div>
+                    <div className="relative z-10 flex items-baseline gap-2">
+                      <span className="text-5xl font-black drop-shadow-md tabular-nums tracking-tight">
+                        {currentNetSalary.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                      </span>
+                      <span className="text-sm font-bold text-white/80">บาท</span>
+                    </div>
+                  </div>
+
                 </div>
               </form>
 
               <div className="p-5 border-t border-slate-100 bg-white flex justify-end gap-3 shrink-0">
                 <button type="button" onClick={() => setIsPayrollModalOpen(false)} className="px-6 py-3.5 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200 transition-colors">ยกเลิก</button>
-                <button type="submit" form="payrollForm" disabled={isSavingPayroll} className={`px-8 py-3.5 bg-gradient-to-r ${isPT ? 'from-purple-600 to-indigo-600' : 'from-emerald-500 to-teal-500'} text-white rounded-xl font-black text-sm hover:scale-[1.02] transition-transform shadow-lg disabled:opacity-50 flex items-center gap-2`}>
-                  {isSavingPayroll ? '⏳ กำลังบันทึก...' : '✅ ออกสลิปเงินเดือน'}
+                <button type="submit" form="payrollForm" disabled={isSavingPayroll} className={`px-8 py-3.5 bg-gradient-to-r ${isPT ? 'from-purple-600 to-indigo-600' : 'from-emerald-600 to-teal-600'} text-white rounded-xl font-black text-sm hover:scale-[1.02] transition-transform shadow-lg disabled:opacity-50 flex items-center gap-2`}>
+                  {isSavingPayroll ? '⏳ กำลังบันทึก...' : '💾 บันทึกสลิป (ยังไม่ส่งอีเมล)'}
                 </button>
               </div>
             </div>
@@ -13978,7 +15629,7 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
           </div>
         </div>
       )}
-      {/* 🚀 AUTO PAYROLL MODAL - วางตรงนี้เด้งแน่นอน 100% */}
+      {/* 🚀 AUTO PAYROLL MODAL - สร้างสลิปอัตโนมัติ 26-25 (บันทึกเป็น Draft ซ่อนไว้ยังไม่ส่งเมล) */}
       {showAutoPayrollModal && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
           <div className="bg-white rounded-[2.5rem] w-full max-w-2xl max-h-[85vh] overflow-hidden shadow-2xl flex flex-col animate-pop-in">
@@ -14032,13 +15683,18 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                       });
 
                       const [year, month] = payrollFilterMonth.split('-');
-                      const startDate = `${year}-${month}-01`;
-                      const endDateObj = new Date(year, parseInt(month), 1); 
-                      const endDate = `${endDateObj.getFullYear()}-${String(endDateObj.getMonth() + 1).padStart(2, '0')}-01`;
+                      let sY = parseInt(year), sM = parseInt(month) - 1;
+                      if (sM < 1) { sM = 12; sY -= 1; }
+                      
+                      const startDateISO = `${sY}-${String(sM).padStart(2, '0')}-26T00:00:00+07:00`;
+                      const endDateISO = `${year}-${String(month).padStart(2, '0')}-26T00:00:00+07:00`;
+                      const bufferEndDate = `${year}-${String(month).padStart(2, '0')}-27T00:00:00+07:00`;
+                      
+                      const startDateStr = startDateISO.split('T')[0];
+                      const endDateStr = `${year}-${String(month).padStart(2, '0')}-25`;
 
                       const payrollInserts = [];
 
-                      // 🟢 วนลูปคำนวณเงินเดือนให้พนักงานทีละคน
                       for (const empId of selectedEmps) {
                         const empInfo = employees.find(e => e.id === empId);
                         if (!empInfo) continue;
@@ -14049,8 +15705,11 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                         const baseSalary = Number(empInfo.base_salary) || 0;
                         const hRate = Number(empInfo.hourly_rate) || 0;
 
-                        // 1. ดึงข้อมูลเวลาเข้างาน
-                        const { data: attLogs } = await supabase.from('attendance_logs').select('timestamp, log_type').eq('employee_id', empId).gte('timestamp', `${startDate}T00:00:00Z`).lt('timestamp', `${endDate}T00:00:00Z`);
+                        const { data: attLogs } = await supabase.from('attendance_logs')
+                          .select('timestamp, log_type')
+                          .eq('employee_id', empId)
+                          .gte('timestamp', startDateISO)
+                          .lt('timestamp', bufferEndDate);
                         
                         let totalWorkMins = 0; let totalOTMins = 0; let totalLateMins = 0; let workedDates = new Set();
                         const dailyLogs = {};
@@ -14075,9 +15734,11 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                               let currentIn = null; let checkInCount = 0;
                               logsOfDay.forEach(log => {
                                 if (log.log_type === 'check_in') {
-                                  currentIn = new Date(log.timestamp);
-                                  checkInCount++;
-                                  if (!firstCheckIn) firstCheckIn = currentIn; 
+                                  if (!currentIn && log.timestamp < endDateISO) {
+                                    currentIn = new Date(log.timestamp);
+                                    checkInCount++;
+                                    if (!firstCheckIn) firstCheckIn = currentIn; 
+                                  }
                                 } else if (log.log_type === 'check_out' && currentIn) {
                                   dailyWorkMins += Math.floor((new Date(log.timestamp) - currentIn) / (1000 * 60));
                                   currentIn = null;
@@ -14085,7 +15746,7 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                               });
                               if (checkInCount === 1 && dailyWorkMins > 300) dailyWorkMins -= 60; 
                             } else {
-                              const checkIns = logsOfDay.filter(l => l.log_type === 'check_in');
+                              const checkIns = logsOfDay.filter(l => l.log_type === 'check_in' && l.timestamp < endDateISO);
                               const checkOuts = logsOfDay.filter(l => l.log_type === 'check_out');
                               if (checkIns.length > 0 && checkOuts.length > 0) {
                                 firstCheckIn = new Date(checkIns[0].timestamp);
@@ -14119,13 +15780,12 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
 
                         if (isPartTime) {
                           salaryAmount = Math.round((totalWorkMins * hRate) / 60); 
-                          otPay = 0; // Part-time รวมในนาทีทำงานแล้ว
+                          otPay = 0; 
                         } else {
                           salaryAmount = baseSalary;
                           otPay = Math.round(Number(totalOTHours) * ((baseSalary / 30 / 8) * 1.5));
                         }
 
-                        // 2. ดึงยอดขายและคอมมิชชั่น
                         const { data: empSalesData } = await supabase.from('employee_sales')
                           .select('current_sales, commission_rate')
                           .eq('employee_id', empId)
@@ -14134,15 +15794,14 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
 
                         const commission = empSalesData ? (Number(empSalesData.current_sales) * (Number(empSalesData.commission_rate || 0) / 100)) : 0;
 
-                        // 3. หักวันลาและสาย
                         let leaveDeduct = 0; let autoLateDeduction = 0;
                         if (!isPartTime) {
                           const { data: allLeavesInMonth } = await supabase.from('leave_requests')
                             .select('leave_type, start_date, end_date')
                             .eq('employee_id', empId)
                             .eq('status', 'อนุมัติ')
-                            .lt('start_date', endDate)
-                            .gte('end_date', startDate);
+                            .lte('start_date', endDateStr)
+                            .gte('end_date', startDateStr);
                             
                           if (allLeavesInMonth && allLeavesInMonth.length > 0) {
                             let unpaidMinsInMonth = 0;
@@ -14150,8 +15809,8 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                               const s = new Date(l.start_date);
                               const e = new Date(l.end_date || l.start_date);
                               for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
-                                 const dateStr = d.toISOString().split('T')[0];
-                                 if (dateStr >= startDate && dateStr < endDate && !workedDates.has(dateStr)) {
+                                 const dateLoopStr = d.toISOString().split('T')[0];
+                                 if (dateLoopStr >= startDateStr && dateLoopStr <= endDateStr && !workedDates.has(dateLoopStr)) {
                                     if (l.leave_type === 'ลาไม่รับเงินเดือน') unpaidMinsInMonth += 480; 
                                  }
                               }
@@ -14162,7 +15821,6 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                           if (totalLateMins > 0) autoLateDeduction = Math.round(totalLateMins * (baseSalary / 30 / 8 / 60));
                         }
 
-                        // 4. หักประกันสังคมและภาษี
                         const ssoRate = 5; const ssoMax = 17500;
                         const ssoDeduct = (!isPartTime && empInfo.has_social_security !== false) ? Math.round(Math.min(baseSalary, ssoMax) * (ssoRate / 100)) : 0;
                         
@@ -14202,18 +15860,16 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                           social_security_deduction: ssoDeduct, 
                           tax_deduction: taxDeduct,             
                           net_salary: netSalary,
+                          is_published: false, // 🛡️ ล็อคไว้ไม่ให้พนักงานเห็นจนกว่าจะกดยิงเมล
                           created_at: new Date().toISOString()
                         });
-                      } // สิ้นสุด Loop
+                      }
 
-                      // 5. บันทึกลงฐานข้อมูล
                       const { data, error } = await supabase.from('payroll_slips').insert(payrollInserts).select('*, employees(full_name, employee_code)'); 
                       if (error) throw error;
 
-                      // 6. อัปเดตตารางหน้าจอ
                       if (data) setPayrollData(prev => [...data, ...prev]);
-
-                      await fetchDashboardData(true); // บังคับดึงใหม่
+                      await fetchDashboardData(true); 
 
                       setShowAutoPayrollModal(false);
                       setIsPayrollModalOpen(false); 
@@ -14221,8 +15877,8 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                       
                       Swal.fire({
                         icon: 'success',
-                        title: 'สร้างสลิปสำเร็จ!',
-                        text: `คำนวณและบันทึกข้อมูลเรียบร้อยแล้ว`,
+                        title: 'สร้างสลิปอัตโนมัติสำเร็จ!',
+                        text: `บันทึกข้อมูลเข้าระบบแล้ว (คุณสามารถตรวจสอบและกดส่งอีเมลทีหลังได้)`,
                         confirmButtonColor: '#6366f1'
                       });
 
@@ -14235,7 +15891,7 @@ if (LINE_ACCESS_TOKEN && LINE_USER_ID) {
                   }}
                   className="flex-[2] py-4 bg-indigo-600 text-white rounded-2xl font-black text-sm hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 disabled:opacity-50"
                 >
-                  {isSavingPayroll ? '⏳ กำลังคำนวณและบันทึก...' : `🚀 ยืนยันสร้างสลิป (${selectedEmps.length} รายการ)`}
+                  {isSavingPayroll ? '⏳ กำลังคำนวณและบันทึก...' : `🚀 บันทึกสลิป ${selectedEmps.length} รายการ (ยังไม่ส่งเมล)`}
                 </button>
             </div>
           </div>
